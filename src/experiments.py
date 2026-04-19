@@ -28,8 +28,8 @@ def run_across_seeds(
 ) -> pd.DataFrame:
     """Train `build_model(seed)` on each (seed, fold); return metrics DataFrame.
 
-    Rows: one per (seed, fold). Columns: seed, fold, wmape, rmse_log, rmse_vol,
-    mape, smape, train_time_sec.
+    Rows: one per (seed, fold). Columns: seed, fold, wmape, rmse_log, rmse,
+    rmsle, mape, smape, r2, r2_log, train_time_sec.
     """
     seeds = seeds or SEEDS
     folds = expanding_window_cv(df_dev)

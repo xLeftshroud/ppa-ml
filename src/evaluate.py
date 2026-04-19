@@ -37,6 +37,25 @@ def smape(y_true, y_pred) -> float:
     return float(np.mean(np.abs(y - yh) / denom))
 
 
+def rmsle(y_true, y_pred) -> float:
+    """Root Mean Squared Logarithmic Error. Inputs are on original (volume) scale.
+
+    Formula: sqrt(mean((log1p(y) - log1p(max(0, yh)))^2)). Clipping negatives
+    before log1p is the standard Kaggle / sklearn convention.
+    """
+    y, yh = _to_arr(y_true), _to_arr(y_pred)
+    yh = np.clip(yh, 0.0, None)
+    return float(np.sqrt(np.mean((np.log1p(y) - np.log1p(yh)) ** 2)))
+
+
+def r2_score(y_true, y_pred) -> float:
+    """Coefficient of determination: 1 - SS_res / SS_tot."""
+    y, yh = _to_arr(y_true), _to_arr(y_pred)
+    ss_res = float(np.sum((y - yh) ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    return float(1.0 - ss_res / ss_tot) if ss_tot > 0 else np.nan
+
+
 def mase(y_true, y_pred, y_train) -> float:
     """MASE with naive-1 scaling on training series."""
     y, yh, yt = _to_arr(y_true), _to_arr(y_pred), _to_arr(y_train)
@@ -63,9 +82,12 @@ def metrics_table(
     out = {
         "wmape": wmape(y_vol, yh_vol),
         "rmse_log": rmse(y_true_log, y_pred_log),
-        "rmse_vol": rmse(y_vol, yh_vol),
+        "rmse": rmse(y_vol, yh_vol),
+        "rmsle": rmsle(y_vol, yh_vol),
         "mape": mape(y_vol, yh_vol),
         "smape": smape(y_vol, yh_vol),
+        "r2": r2_score(y_vol, yh_vol),
+        "r2_log": r2_score(y_true_log, y_pred_log),
     }
     if train_time_sec is not None:
         out["train_time_sec"] = float(train_time_sec)
