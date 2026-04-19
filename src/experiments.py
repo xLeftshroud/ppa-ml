@@ -28,7 +28,7 @@ def run_across_seeds(
 ) -> pd.DataFrame:
     """Train `build_model(seed)` on each (seed, fold); return metrics DataFrame.
 
-    Rows: one per (seed, fold). Columns: seed, fold, wape, rmse_log, rmse_vol,
+    Rows: one per (seed, fold). Columns: seed, fold, wmape, rmse_log, rmse_vol,
     mape, smape, train_time_sec.
     """
     seeds = seeds or SEEDS
@@ -89,7 +89,7 @@ def run_baseline_across_seeds(
     return pd.DataFrame(rows)
 
 
-def summarize(metrics_df: pd.DataFrame, metric: str = "wape") -> pd.DataFrame:
+def summarize(metrics_df: pd.DataFrame, metric: str = "wmape") -> pd.DataFrame:
     """Mean + 95% CI across seeds*folds per model."""
     g = metrics_df.groupby("model")[metric]
     n = g.size()

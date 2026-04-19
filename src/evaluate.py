@@ -11,8 +11,10 @@ def _to_arr(a) -> np.ndarray:
     return np.asarray(a, dtype=float)
 
 
-def wape(y_true, y_pred) -> float:
-    """Weighted APE = sum(|err|) / sum(|y|). Primary headline metric."""
+def wmape(y_true, y_pred) -> float:
+    """Weighted MAPE = sum(|err|) / sum(|y|). Primary headline metric.
+
+    Also known as WAPE in some literature; WMAPE is the more common name."""
     y, yh = _to_arr(y_true), _to_arr(y_pred)
     denom = np.abs(y).sum()
     return float(np.abs(y - yh).sum() / denom) if denom > 0 else np.nan
@@ -59,7 +61,7 @@ def metrics_table(
     yh_vol = np.clip(yh_vol, a_min=0.0, a_max=None)
 
     out = {
-        "wape": wape(y_vol, yh_vol),
+        "wmape": wmape(y_vol, yh_vol),
         "rmse_log": rmse(y_true_log, y_pred_log),
         "rmse_vol": rmse(y_vol, yh_vol),
         "mape": mape(y_vol, yh_vol),
@@ -70,19 +72,19 @@ def metrics_table(
     return out
 
 
-def stratified_wape(
+def stratified_wmape(
     df: pd.DataFrame,
     y_true_log: np.ndarray,
     y_pred_log: np.ndarray,
     group_col: str,
 ) -> pd.DataFrame:
-    """Per-group WAPE for error analysis (e.g. by customer, by pack_tier)."""
+    """Per-group WMAPE for error analysis (e.g. by customer, by pack_tier)."""
     y_vol = np.expm1(y_true_log)
     yh_vol = np.clip(np.expm1(y_pred_log), 0, None)
     tmp = pd.DataFrame({"g": df[group_col].values, "y": y_vol, "yh": yh_vol})
     out = (
         tmp.groupby("g")
-        .apply(lambda s: pd.Series({"wape": wape(s.y, s.yh), "n": len(s)}))
+        .apply(lambda s: pd.Series({"wmape": wmape(s.y, s.yh), "n": len(s)}))
         .reset_index()
         .rename(columns={"g": group_col})
     )

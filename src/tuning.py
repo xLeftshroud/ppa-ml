@@ -10,7 +10,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from .evaluate import wape
+from .evaluate import wmape
 from .models.elastic_net import ElasticNetModel
 from .models.rf import RFModel
 from .models.xgb import XGBModel
@@ -20,8 +20,8 @@ from .models.lgb import LGBModel
 MODEL_TYPES = ("elastic_net", "rf", "xgb", "lgb")
 
 
-def _mean_cv_wape_with(model_builder, df_dev, y_dev, folds, feature_cols, passes_val=False):
-    """Train model on each fold's train, predict on val, return mean WAPE across folds.
+def _mean_cv_wmape_with(model_builder, df_dev, y_dev, folds, feature_cols, passes_val=False):
+    """Train model on each fold's train, predict on val, return mean WMAPE across folds.
 
     ``passes_val=True`` means the builder's fit() accepts X_val/y_val for early stopping.
     """
@@ -40,7 +40,7 @@ def _mean_cv_wape_with(model_builder, df_dev, y_dev, folds, feature_cols, passes
             model.fit(X_tr, y_tr)
         pred_log = model.predict(X_va)
         pred_vol = np.clip(np.expm1(pred_log), 0, None)
-        scores.append(wape(vol_true[va_idx], pred_vol))
+        scores.append(wmape(vol_true[va_idx], pred_vol))
     return float(np.mean(scores))
 
 
@@ -109,7 +109,7 @@ def build_objective(
 ) -> Callable:
     """Return an Optuna objective closure for `model_type`.
 
-    The objective reports mean WAPE across all CV folds on the validation
+    The objective reports mean WMAPE across all CV folds on the validation
     portion of each fold. Tuning then minimizes this value.
     """
     if model_type not in _SUGGESTERS:
@@ -120,7 +120,7 @@ def build_objective(
 
     def objective(trial) -> float:
         model_builder = lambda: suggester(trial, seed)
-        return _mean_cv_wape_with(
+        return _mean_cv_wmape_with(
             model_builder, df_dev, y_dev, folds, feature_cols, passes_val=passes_val
         )
 

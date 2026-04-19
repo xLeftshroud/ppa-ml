@@ -18,7 +18,7 @@ from src.config import DATA_PATH
 from src.features import add_base_features, add_panel_features, drop_collinear_prices
 from src.split import expanding_window_cv, final_holdout_split, describe_folds
 from src.baselines import naive_predict, seasonal_naive_predict
-from src.evaluate import wape, metrics_table
+from src.evaluate import wmape, metrics_table
 from src.models.elastic_net import ElasticNetModel
 
 
@@ -82,12 +82,12 @@ def test_baselines():
     pred = naive_predict(df_tr, df_va)
     assert pred.shape == y_true.shape
     assert not np.isnan(pred).any()
-    w_naive = wape(np.expm1(y_true), np.expm1(pred))
+    w_naive = wmape(np.expm1(y_true), np.expm1(pred))
 
     pred_s = seasonal_naive_predict(df_tr, df_va)
     assert pred_s.shape == y_true.shape
-    w_sn = wape(np.expm1(y_true), np.expm1(pred_s))
-    print(f"[OK] baselines: naive WAPE={w_naive:.3f} seasonal_naive WAPE={w_sn:.3f}")
+    w_sn = wmape(np.expm1(y_true), np.expm1(pred_s))
+    print(f"[OK] baselines: naive WMAPE={w_naive:.3f} seasonal_naive WMAPE={w_sn:.3f}")
 
 
 def test_elastic_net_fits():
@@ -107,7 +107,7 @@ def test_elastic_net_fits():
     assert pred.shape == y.shape
     metrics = metrics_table(y, pred)
     elasticity = m.own_price_elasticity()
-    print(f"[OK] elastic_net fit: WAPE={metrics['wape']:.3f}, "
+    print(f"[OK] elastic_net fit: WMAPE={metrics['wmape']:.3f}, "
           f"own-price elasticity={elasticity:.3f}")
     # sanity: elasticity should be negative-ish on real data (NOT an assert, just report)
 

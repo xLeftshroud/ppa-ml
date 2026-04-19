@@ -13,8 +13,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .evaluate import wape
-
 
 SOFT_DRINK_LOWER = -3.5
 SOFT_DRINK_UPPER = -0.5

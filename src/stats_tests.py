@@ -1,6 +1,6 @@
 """Statistical significance tests for the 5-model comparison.
 
-Given a long DataFrame (model, seed, fold, wape, ...) with N_models x 20
+Given a long DataFrame (model, seed, fold, wmape, ...) with N_models x 20
 observations (5 seeds x 4 folds), runs:
   - Friedman test           -> chi-square + p-value + avg rank per model
   - Nemenyi post-hoc         -> pairwise p-value matrix
@@ -19,7 +19,7 @@ import pandas as pd
 
 
 def _pivot_observations(
-    metrics_df: pd.DataFrame, metric: str = "wape"
+    metrics_df: pd.DataFrame, metric: str = "wmape"
 ) -> pd.DataFrame:
     """Pivot to observations (rows = seed*fold, cols = model) aligned."""
     metrics_df = metrics_df.copy()
@@ -30,7 +30,7 @@ def _pivot_observations(
     return wide.dropna(how="any")
 
 
-def friedman_test(metrics_df: pd.DataFrame, metric: str = "wape") -> dict:
+def friedman_test(metrics_df: pd.DataFrame, metric: str = "wmape") -> dict:
     """Return chi-square, p-value, and average rank per model (lower=better)."""
     from scipy.stats import friedmanchisquare
 
@@ -47,7 +47,7 @@ def friedman_test(metrics_df: pd.DataFrame, metric: str = "wape") -> dict:
     }
 
 
-def nemenyi_posthoc(metrics_df: pd.DataFrame, metric: str = "wape") -> pd.DataFrame:
+def nemenyi_posthoc(metrics_df: pd.DataFrame, metric: str = "wmape") -> pd.DataFrame:
     """Pairwise Nemenyi p-values (requires scikit-posthocs)."""
     import scikit_posthocs as sp
 
@@ -55,7 +55,7 @@ def nemenyi_posthoc(metrics_df: pd.DataFrame, metric: str = "wape") -> pd.DataFr
     return sp.posthoc_nemenyi_friedman(wide.values)
 
 
-def wilcoxon_pairwise(metrics_df: pd.DataFrame, metric: str = "wape") -> pd.DataFrame:
+def wilcoxon_pairwise(metrics_df: pd.DataFrame, metric: str = "wmape") -> pd.DataFrame:
     """Pairwise Wilcoxon signed-rank + Cohen's d.
 
     Cohen's d here uses the paired-differences interpretation:
@@ -94,7 +94,7 @@ def wilcoxon_pairwise(metrics_df: pd.DataFrame, metric: str = "wape") -> pd.Data
 
 
 def critical_difference_diagram(
-    metrics_df: pd.DataFrame, metric: str = "wape", alpha: float = 0.05, ax=None
+    metrics_df: pd.DataFrame, metric: str = "wmape", alpha: float = 0.05, ax=None
 ):
     """Draw a Demsar (2006) critical-difference diagram."""
     import scikit_posthocs as sp
