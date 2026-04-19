@@ -247,6 +247,39 @@ def elastic_net_select(
     return selected, info
 
 
+def elastic_net_stability_selection(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    n_boot: int = 50,
+    vote_threshold: float = 0.8,
+    l1_ratios: tuple[float, ...] = (0.1, 0.5, 0.7, 0.9, 0.95),
+    random_state: int = 42,
+) -> tuple[list[str], pd.Series]:
+    """Bootstrap L1 selection n_boot times; keep features selected in >= vote_threshold.
+
+    Linear-model analogue to ``stability_selection`` (Meinshausen & Buhlmann 2010).
+    """
+    rng = np.random.default_rng(random_state)
+    n = len(X)
+    counts = pd.Series(0, index=X.columns, dtype=int)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        Xb = X.iloc[idx].reset_index(drop=True)
+        yb = np.asarray(y)[idx]
+        try:
+            sel, _ = elastic_net_select(
+                Xb, yb, l1_ratios=l1_ratios,
+                random_state=int(rng.integers(0, 10_000)),
+            )
+        except Exception:
+            continue
+        for c in sel:
+            counts[c] += 1
+    frequencies = counts / n_boot
+    kept = frequencies[frequencies >= vote_threshold].index.tolist()
+    return kept, frequencies
+
+
 def run_full_pipeline(
     df: pd.DataFrame,
     candidate_cols: list[str],
@@ -258,9 +291,9 @@ def run_full_pipeline(
     """Full 4-step industrial feature selection.
 
     Tree models (xgb/lgb/rf): VIF -> BorutaShap -> (optional) Stability.
-    Elastic Net: VIF -> L1 selection via ElasticNetCV (Boruta is skipped --
-    L1 sparsity IS the selector; external shadow/SHAP is not meaningful for
-    linear models).
+    Elastic Net:              VIF -> L1 (ElasticNetCV) -> (optional) L1 Stability.
+    Boruta is skipped for Elastic Net -- L1 sparsity IS the selector;
+    external shadow/SHAP is not meaningful for linear models.
 
     Returns a dict with keys: step1_core, step2_after_vif, step3_*, step4_stable, final.
     """
@@ -279,14 +312,25 @@ def run_full_pipeline(
         except Exception as e:
             l1_sel, l1_info = after_vif, {"error": str(e)}
             print(f"[feature_selection] elastic_net_select failed: {e}. Falling back to VIF set.")
-        final = list(dict.fromkeys(protected + l1_sel))
+
+        stable_lin: list[str] = l1_sel
+        freqs_lin: pd.Series | None = None
+        if do_stability:
+            try:
+                stable_lin, freqs_lin = elastic_net_stability_selection(
+                    X_lin, y_lin, random_state=random_state
+                )
+            except Exception as e:
+                print(f"[feature_selection] elastic_net_stability_selection failed: {e}")
+
+        final = list(dict.fromkeys(protected + stable_lin))
         return {
             "step1_core": protected,
             "step2_after_vif": after_vif,
             "step3_l1_select": l1_sel,
             "step3_info": l1_info,
-            "step4_stable": None,
-            "step4_frequencies": None,
+            "step4_stable": stable_lin,
+            "step4_frequencies": freqs_lin,
             "final": final,
         }
 
