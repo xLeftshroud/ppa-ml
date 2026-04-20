@@ -8,9 +8,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .config import COLLINEAR_DROP
-
-
 def add_base_features(df: pd.DataFrame) -> pd.DataFrame:
     """Leakage-free features (computed per row, no group stats).
 
@@ -89,11 +86,6 @@ def add_panel_features(
     return out
 
 
-def drop_collinear_prices(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop price_per_item and price_per_100ml (colinear with price_per_litre)."""
-    return df.drop(columns=[c for c in COLLINEAR_DROP if c in df.columns])
-
-
 def _assign_pack_tier(df: pd.DataFrame) -> pd.Series:
     """single-serve / multi-pack-take-home / large-format / other."""
     ps = df["pack_size_internal"]
@@ -117,12 +109,10 @@ def build_features(
     """Full feature pipeline. Returns (train_feat, holdout_feat)."""
     train_b = add_base_features(train_df)
     train_out = add_panel_features(train_b, train_b)
-    train_out = drop_collinear_prices(train_out)
 
     holdout_out = None
     if holdout_df is not None:
         hold_b = add_base_features(holdout_df)
         holdout_out = add_panel_features(train_b, hold_b)
-        holdout_out = drop_collinear_prices(holdout_out)
 
     return train_out, holdout_out

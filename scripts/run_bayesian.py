@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import DATA_PATH, OUTPUTS
-from src.features import add_base_features, add_panel_features, drop_collinear_prices
+from src.features import add_base_features, add_panel_features
 from src.split import expanding_window_cv, final_holdout_split
 from src.models.hier_bayes import BayesianHierModel
 from src.elasticity import bayesian_elasticity
@@ -40,7 +40,7 @@ def main():
     df = pd.read_csv(DATA_PATH)
     df_b = add_base_features(df)
     df_fe = add_panel_features(df_b, df_b)
-    df_fe = drop_collinear_prices(df_fe).dropna(subset=["log_volume"]).reset_index(drop=True)
+    df_fe = df_fe.dropna(subset=["log_volume"]).reset_index(drop=True)
 
     dev_idx, test_idx = final_holdout_split(df_fe)
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)

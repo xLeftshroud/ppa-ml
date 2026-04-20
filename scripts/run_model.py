@@ -29,8 +29,16 @@ import sklearn
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import DATA_PATH, OUTPUTS, SEEDS, TUNING_WALLCLOCK_SEC, TUNING_MAX_TRIALS, DOMAIN_CORE_FEATURES
-from src.features import add_base_features, add_panel_features, drop_collinear_prices
+from src.config import (
+    DATA_PATH,
+    OUTPUTS,
+    SEEDS,
+    TUNING_WALLCLOCK_SEC,
+    TUNING_MAX_TRIALS,
+    CANDIDATE_FEATURES,
+    CATEGORICAL_COLS,
+)
+from src.features import add_base_features, add_panel_features
 from src.split import expanding_window_cv, final_holdout_split
 from src.feature_selection import run_full_pipeline
 from src.tuning import run_tuning
@@ -59,42 +67,17 @@ def load_and_engineer() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
     df_b = add_base_features(df)
     df_fe = add_panel_features(df_b, df_b)
-    df_fe = drop_collinear_prices(df_fe)
     return df_fe
 
 
 def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
     """Run the 4-step feature selection. Returns final feature list."""
-    base_candidates = [
-        "log_price_per_litre",
-        "price_per_litre",
-        "promotion_indicator",
-        "promo_depth",
-        "pack_size_internal",
-        "units_per_package_internal",
-        "total_pack_volume_ml",
-        "price_premium_vs_brand",
-        "price_premium_vs_pack_tier",
-        "price_imputed_flag",
-        "week_sin",
-        "week_cos",
-        "log_volume_lag1",
-        "log_volume_lag4",
-    ]
-    cats = ["product_sku_code", "customer", "top_brand", "flavor_internal",
-            "pack_type_internal", "pack_tier"]
-
     # Elastic Net uses log_price_per_litre (log-log -> coef = elasticity);
-    # tree models use raw price_per_litre. Drop the other version from the
-    # candidate pool so correlation_prune can't silently remove the one we
-    # actually want.
-    if model_type == "elastic_net":
-        candidates = [c for c in base_candidates
-                      if c in df_dev.columns and c != "price_per_litre"]
-    else:
-        candidates = [c for c in base_candidates
-                      if c in df_dev.columns and c != "log_price_per_litre"]
-    cats_in = [c for c in cats if c in df_dev.columns]
+    # tree models use raw price_per_litre.
+    exclude = "price_per_litre" if model_type == "elastic_net" else "log_price_per_litre"
+    candidates = [c for c in CANDIDATE_FEATURES
+                  if c in df_dev.columns and c != exclude]
+    cats_in = [c for c in CATEGORICAL_COLS if c in df_dev.columns]
 
     # take a smaller random sample for BorutaShap (performance)
     fs_df = df_dev.sample(min(10000, len(df_dev)), random_state=42).reset_index(drop=True)

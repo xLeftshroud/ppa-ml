@@ -18,16 +18,7 @@ TIME_COL = "continuous_week"
 DISPLAY_TIME_COL = "yearweek"
 PANEL_KEYS = ["product_sku_code", "customer"]
 
-DOMAIN_CORE_FEATURES = [
-    "price_per_litre",
-    "promotion_indicator",
-    "pack_size_internal",
-    "units_per_package_internal",
-    "total_pack_volume_ml",
-    "week_sin",
-    "week_cos",
-]
-COLLINEAR_DROP = ["price_per_item", "price_per_100ml"]
+# catagorical features that put into the training mode, they are not passed into the feature selection flow
 CATEGORICAL_COLS = [
     "product_sku_code",
     "customer",
@@ -35,4 +26,34 @@ CATEGORICAL_COLS = [
     "flavor_internal",
     "pack_type_internal",
     "pack_tier",
+]
+
+
+# this is all the numerical features that puts into feature selection
+CANDIDATE_FEATURES = [
+    "log_price_per_litre",
+    "price_per_litre",
+    "promotion_indicator",
+    "promo_depth",
+    "pack_size_internal",
+    "units_per_package_internal",
+    "total_pack_volume_ml",
+    "price_premium_vs_brand",
+    "price_premium_vs_pack_tier",
+    "price_imputed_flag",
+    "week_sin",
+    "week_cos",
+    "log_volume_lag1",
+    "log_volume_lag4",
+]
+
+# a subset of CANDIDATE_FEATURES, thses features are mandatory, even passes through feature seletion, they wont be removed
+PROTECTED_FEATURES = [
+    "price_per_litre",
+    "promotion_indicator",
+    "pack_size_internal",
+    "units_per_package_internal",
+    "total_pack_volume_ml",
+    "week_sin",
+    "week_cos",
 ]

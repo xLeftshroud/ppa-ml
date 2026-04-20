@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.config import DATA_PATH
-from src.features import add_base_features, add_panel_features, drop_collinear_prices
+from src.features import add_base_features, add_panel_features
 from src.split import expanding_window_cv, final_holdout_split, describe_folds
 from src.baselines import naive_predict, seasonal_naive_predict
 from src.evaluate import wmape, metrics_table
@@ -33,7 +33,6 @@ def test_feature_engineering():
     df = _small_df()
     df_b = add_base_features(df)
     df_fe = add_panel_features(df_b, df_b)
-    df_fe = drop_collinear_prices(df_fe)
 
     # new features present
     for col in ["log_volume", "log_price_per_litre", "total_pack_volume_ml",
@@ -41,9 +40,10 @@ def test_feature_engineering():
                 "price_premium_vs_brand", "price_premium_vs_pack_tier",
                 "promo_depth", "log_volume_lag1", "log_volume_lag4"]:
         assert col in df_fe.columns, f"missing feature: {col}"
-    # collinear prices dropped
-    assert "price_per_item" not in df_fe.columns
-    assert "price_per_100ml" not in df_fe.columns
+    # collinear prices kept in frame but excluded from CANDIDATE_FEATURES
+    from src.config import CANDIDATE_FEATURES
+    assert "price_per_item" not in CANDIDATE_FEATURES
+    assert "price_per_100ml" not in CANDIDATE_FEATURES
     # target transform valid
     assert (df_fe["log_volume"] >= 0).all()
     print(f"[OK] feature_engineering: {df_fe.shape}")

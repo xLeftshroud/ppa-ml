@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .config import DOMAIN_CORE_FEATURES
+from .config import PROTECTED_FEATURES
 
 
 def vif_prune(
@@ -297,7 +297,7 @@ def run_full_pipeline(
 
     Returns a dict with keys: step1_core, step2_after_vif, step3_*, step4_stable, final.
     """
-    protected = [c for c in DOMAIN_CORE_FEATURES if c in candidate_cols]
+    protected = [c for c in PROTECTED_FEATURES if c in candidate_cols]
 
     # Step 2: VIF + correlation
     after_corr = correlation_prune(df, candidate_cols, protected=protected)
