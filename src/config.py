@@ -13,6 +13,10 @@ TEST_WEEK_RATIO = 0.20
 TUNING_WALLCLOCK_SEC = 3600
 TUNING_MAX_TRIALS = 1000
 
+# RF cardinality split: <= threshold uses one-hot, > threshold uses target encoding.
+# Other models don't need this: XGB/LGB native, Elastic Net always TE.
+RF_HIGH_CARD_THRESHOLD = 20
+
 TARGET = "nielsen_total_volume"
 TIME_COL = "continuous_week"
 DISPLAY_TIME_COL = "yearweek"
@@ -20,7 +24,7 @@ PANEL_KEYS = ["product_sku_code", "customer"]
 
 # catagorical features that put into the training mode, they are not passed into the feature selection flow
 CATEGORICAL_COLS = [
-    "product_sku_code",
+    # "product_sku_code",
     "customer",
     "top_brand",
     "flavor_internal",
