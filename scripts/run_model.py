@@ -38,7 +38,7 @@ from src.config import (
     CANDIDATE_FEATURES,
     CATEGORICAL_COLS,
 )
-from src.features import add_base_features, add_panel_features
+from src.features import build_features
 from src.split import expanding_window_cv, final_holdout_split
 from src.feature_selection import run_full_pipeline
 from src.tuning import run_tuning
@@ -65,9 +65,7 @@ PASSES_VAL = {"elastic_net": False, "rf": False, "xgb": True, "lgb": True}
 
 def load_and_engineer() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b)
-    return df_fe
+    return build_features(df)
 
 
 def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
@@ -81,7 +79,7 @@ def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
 
     # take a smaller random sample for BorutaShap (performance)
     fs_df = df_dev.sample(min(10000, len(df_dev)), random_state=42).reset_index(drop=True)
-    y_fs = fs_df["log_volume"].values
+    y_fs = fs_df["log_nielsen_total_volume"].values
     result = run_full_pipeline(
         fs_df[candidates].dropna(),
         candidate_cols=candidates,
@@ -122,8 +120,8 @@ def main():
     dev_idx, test_idx = final_holdout_split(df_fe)
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)
     df_test = df_fe.iloc[test_idx].reset_index(drop=True)
-    df_dev = df_dev.dropna(subset=["log_volume"]).reset_index(drop=True)
-    y_dev = df_dev["log_volume"].values
+    df_dev = df_dev.dropna(subset=["nielsen_total_volume"]).reset_index(drop=True)
+    y_dev = df_dev["log_nielsen_total_volume"].values
     print(f"    dev rows={len(df_dev)}, sealed test rows={len(df_test)}")
 
     print(f"[2/6] Feature selection pipeline...")
@@ -197,7 +195,7 @@ def main():
     # final test evaluation
     if len(df_test):
         test_pred = champion.predict(df_test[feature_cols])
-        test_metrics = metrics_table(df_test["log_volume"].values, test_pred)
+        test_metrics = metrics_table(df_test["log_nielsen_total_volume"].values, test_pred)
         print(f"    sealed-test metrics: {test_metrics}")
         (OUTPUTS / f"test_metrics_{model_type}{suffix}.json").write_text(
             json.dumps(test_metrics, indent=2)

@@ -71,7 +71,7 @@ def tree_local_elasticity(
         log_price_delta = float(np.log1p(delta))
     y_up = model.predict(X_up)
 
-    # y is log_volume, so (y_up - y_hat) / d(log_price) = elasticity
+    # y is log_nielsen_total_volume, so (y_up - y_hat) / d(log_price) = elasticity
     local_elast = (y_up - y_hat) / log_price_delta
     tmp = pd.DataFrame(
         {

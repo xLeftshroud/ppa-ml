@@ -16,7 +16,7 @@ import pandas as pd
 
 @dataclass
 class Simulator:
-    model: object            # anything with .predict(DataFrame) -> log_volume
+    model: object            # anything with .predict(DataFrame) -> log_nielsen_total_volume
     feature_cols: list[str]
     df_reference: pd.DataFrame
 

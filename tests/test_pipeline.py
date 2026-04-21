@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.config import DATA_PATH
-from src.features import add_base_features, add_panel_features
+from src.features import build_features
 from src.split import expanding_window_cv, final_holdout_split, describe_folds
 from src.baselines import naive_predict, seasonal_naive_predict
 from src.evaluate import wmape, metrics_table
@@ -31,27 +31,21 @@ def _small_df(n_sku: int = 30) -> pd.DataFrame:
 
 def test_feature_engineering():
     df = _small_df()
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b)
+    df_fe = build_features(df)
 
-    # new features present
-    for col in ["log_volume", "log_price_per_litre", "total_pack_volume_ml",
-                "pack_tier", "price_premium_vs_brand", "price_premium_vs_pack_tier",
-                "promo_depth", "log_volume_lag1", "log_volume_lag4"]:
+    for col in ["log_nielsen_total_volume", "log_price_per_litre", "pack_size_total",
+                "pack_tier"]:
         assert col in df_fe.columns, f"missing feature: {col}"
-    # collinear prices kept in frame but excluded from CANDIDATE_FEATURES
     from src.config import CANDIDATE_FEATURES
     assert "price_per_item" not in CANDIDATE_FEATURES
     assert "price_per_100ml" not in CANDIDATE_FEATURES
-    # target transform valid
-    assert (df_fe["log_volume"] >= 0).all()
+    assert (df_fe["log_nielsen_total_volume"] >= 0).all()
     print(f"[OK] feature_engineering: {df_fe.shape}")
 
 
 def test_time_series_cv():
     df = _small_df()
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b)
+    df_fe = build_features(df)
 
     dev_idx, test_idx = final_holdout_split(df_fe)
     assert len(dev_idx) > 0
@@ -70,13 +64,12 @@ def test_time_series_cv():
 
 def test_baselines():
     df = _small_df()
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b).dropna(subset=["log_volume"]).reset_index(drop=True)
+    df_fe = build_features(df).dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
 
     folds = expanding_window_cv(df_fe)
     tr, va = folds[0]
     df_tr, df_va = df_fe.iloc[tr], df_fe.iloc[va]
-    y_true = df_va["log_volume"].values
+    y_true = df_va["log_nielsen_total_volume"].values
 
     pred = naive_predict(df_tr, df_va)
     assert pred.shape == y_true.shape
@@ -91,14 +84,12 @@ def test_baselines():
 
 def test_elastic_net_fits():
     df = _small_df()
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b).dropna(subset=["log_volume"]).reset_index(drop=True)
+    df_fe = build_features(df).dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
 
-    feats = ["log_price_per_litre", "promotion_indicator", "promo_depth",
-             "total_pack_volume_ml", "price_premium_vs_brand",
-             "week_sin", "week_cos"]
+    feats = ["log_price_per_litre", "promotion_indicator",
+             "pack_size_total", "week_sin", "week_cos"]
     X = df_fe[feats].fillna(0.0)
-    y = df_fe["log_volume"].values
+    y = df_fe["log_nielsen_total_volume"].values
 
     m = ElasticNetModel(alpha=1e-2, l1_ratio=0.5, feature_cols=feats)
     m.fit(X, y)

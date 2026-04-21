@@ -6,9 +6,9 @@ DATA_PATH = ROOT / "train_dataset_cleaned.csv"
 OUTPUTS = ROOT / "outputs"
 OUTPUTS.mkdir(exist_ok=True)
 
-SEEDS = [42, 123, 456, 789, 2024]
-N_FOLDS = 4
-N_SPLITS = 4
+SEEDS = [42, 123, 456]
+N_FOLDS = 3
+N_SPLITS = 3
 TEST_WEEK_RATIO = 0.20
 TUNING_WALLCLOCK_SEC = 3600
 TUNING_MAX_TRIALS = 1000
@@ -17,7 +17,7 @@ TUNING_MAX_TRIALS = 1000
 # Other models don't need this: XGB/LGB native, Elastic Net always TE.
 RF_HIGH_CARD_THRESHOLD = 20
 
-TARGET = "nielsen_total_volume"
+TARGET = "log_nielsen_total_volume"
 TIME_COL = "continuous_week"
 DISPLAY_TIME_COL = "yearweek"
 PANEL_KEYS = ["product_sku_code", "customer"]
@@ -38,25 +38,20 @@ CANDIDATE_FEATURES = [
     "log_price_per_litre",
     "price_per_litre",
     "promotion_indicator",
-    "promo_depth",
     "pack_size_internal",
     "units_per_package_internal",
-    "total_pack_volume_ml",
-    "price_premium_vs_brand",
-    "price_premium_vs_pack_tier",
+    "pack_size_total",
     "week_sin",
     "week_cos",
-    "log_volume_lag1",
-    "log_volume_lag4",
+    "continuous_week",
 ]
 
 # a subset of CANDIDATE_FEATURES, thses features are mandatory, even passes through feature seletion, they wont be removed
 PROTECTED_FEATURES = [
     "price_per_litre",
+    "log_price_per_litre",
     "promotion_indicator",
     "pack_size_internal",
     "units_per_package_internal",
-    "total_pack_volume_ml",
-    "week_sin",
-    "week_cos",
+    "continuous_week",
 ]

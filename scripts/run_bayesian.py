@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import DATA_PATH, OUTPUTS
-from src.features import add_base_features, add_panel_features
+from src.features import build_features
 from src.split import expanding_window_cv, final_holdout_split
 from src.models.hier_bayes import BayesianHierModel
 from src.elasticity import bayesian_elasticity
@@ -38,9 +38,8 @@ def main():
     args = ap.parse_args()
 
     df = pd.read_csv(DATA_PATH)
-    df_b = add_base_features(df)
-    df_fe = add_panel_features(df_b, df_b)
-    df_fe = df_fe.dropna(subset=["log_volume"]).reset_index(drop=True)
+    df_fe = build_features(df)
+    df_fe = df_fe.dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
 
     dev_idx, test_idx = final_holdout_split(df_fe)
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)
@@ -65,7 +64,7 @@ def main():
         num_chains=args.chains,
     )
     t0 = time.perf_counter()
-    model.fit(df_train, df_train["log_volume"].values)
+    model.fit(df_train, df_train["log_nielsen_total_volume"].values)
     dur = time.perf_counter() - t0
     print(f"  fit wall-clock: {dur/60:.1f} min")
 
@@ -75,7 +74,7 @@ def main():
 
     if df_val is not None and len(df_val):
         val_pred = model.predict(df_val)
-        m = metrics_table(df_val["log_volume"].values, val_pred, train_time_sec=dur)
+        m = metrics_table(df_val["log_nielsen_total_volume"].values, val_pred, train_time_sec=dur)
         (OUTPUTS / f"metrics_hier_bayes{suffix}.json").write_text(json.dumps(m, indent=2))
         print(f"  val metrics: {m}")
 

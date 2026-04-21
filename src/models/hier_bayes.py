@@ -3,7 +3,7 @@
 Partial pooling of own-price elasticity:
     brand-level mean mu_b <- Normal(-2.0, 1.0)   (soft prior on soft drinks elasticity)
     sku elasticity beta_sku <- Normal(mu_b, sigma_b)
-    log_volume ~ Normal(alpha_sku + beta_sku * log_price + gamma * promo + season, sigma_y)
+    log_nielsen_total_volume ~ Normal(alpha_sku + beta_sku * log_price + gamma * promo + season, sigma_y)
 
 Prior sensitivity analysis is done via the ``prior_scale`` argument:
     'weak'     -> Normal(0, 5)  on brand mean, Exponential(1) on sigma_b
