@@ -1,10 +1,11 @@
-"""Bayesian hierarchical track. Runs once per prior configuration.
+"""Bayesian hierarchical track (v6: brand-nested + flavor/pack crossed).
 
 Usage:
     python -m scripts.run_bayesian --prior moderate --draws 2000
 
-This is the Tier-3 differentiator: partial-pooled SKU-level elasticities
-with 95% HDI. Expect 4-6 hours on CPU for 923 panel units x 2 chains.
+Tier-3 differentiator: per-cell (brand x flavor x pack_tier) elasticity with
+95% HDI, plus full MCMC convergence diagnostics. Expect 45-90 min on CPU for
+~100-150 cells x 2 chains.
 """
 from __future__ import annotations
 
@@ -54,7 +55,7 @@ def main():
         df_train = df_dev
         df_val = df_test if len(df_test) else None
 
-    print(f"Bayesian track: prior={args.prior}, draws={args.draws}, chains={args.chains}")
+    print(f"Bayesian v6: prior={args.prior}, draws={args.draws}, chains={args.chains}")
     print(f"  train rows={len(df_train)}, val rows={len(df_val) if df_val is not None else 0}")
 
     model = BayesianHierModel(
@@ -67,10 +68,31 @@ def main():
     model.fit(df_train, df_train["log_nielsen_total_volume"].values)
     dur = time.perf_counter() - t0
     print(f"  fit wall-clock: {dur/60:.1f} min")
+    print(f"  n_brand={len(model._brand_codes_)} "
+          f"n_flavor={len(model._flavor_codes_)} "
+          f"n_pack={len(model._pack_codes_)} "
+          f"n_cell={len(model._cell_codes_)}")
 
-    elast = bayesian_elasticity(model, df_dev)
+    # --- convergence diagnostics ---
+    import arviz as az
+    summary = model.convergence_summary()
     suffix = f"_{args.prior}"
+    conv_path = OUTPUTS / f"convergence_hier_bayes{suffix}.csv"
+    summary.to_csv(conv_path)
+    n_div = model.divergences()
+    rhat_max = float(summary["r_hat"].max()) if "r_hat" in summary.columns else float("nan")
+    ess_min = float(summary["ess_bulk"].min()) if "ess_bulk" in summary.columns else float("nan")
+    print(f"  rhat max={rhat_max:.4f}, ess_bulk min={ess_min:.0f}, divergences={n_div}")
+    if rhat_max >= 1.01 or n_div > 0:
+        print(f"  [WARN] convergence targets not met (rhat<1.01, divergences==0)")
+
+    # --- per-cell elasticity posterior ---
+    elast = bayesian_elasticity(model, df_dev)
     elast.to_csv(OUTPUTS / f"elasticity_hier_bayes{suffix}.csv", index=False)
+    # also save the raw per-cell posterior (no customer broadcast) for inspection
+    model.elasticity_posterior().to_csv(
+        OUTPUTS / f"elasticity_cells_hier_bayes{suffix}.csv", index=False
+    )
 
     if df_val is not None and len(df_val):
         val_pred = model.predict(df_val)
@@ -79,23 +101,33 @@ def main():
         print(f"  val metrics: {m}")
 
     import numpyro
-    import arviz as az
 
     nc_path = OUTPUTS / f"model_hier_bayes{suffix}.nc"
     meta_path = OUTPUTS / f"metadata_hier_bayes{suffix}.json"
     model.idata_.to_netcdf(nc_path)
 
     metadata = {
-        "model_type": "hier_bayes",
+        "model_type": "hier_bayes_v6",
         "prior_scale": args.prior,
         "num_warmup": int(args.warmup),
         "num_samples": int(args.draws),
         "num_chains": int(args.chains),
         "brand_codes": model._brand_codes_,
-        "sku_codes": model._sku_codes_,
+        "flavor_codes": model._flavor_codes_,
+        "pack_codes": model._pack_codes_,
+        "cell_keys": [list(k) for k in model._cell_keys_],
+        "pack_type_levels": model._pack_type_levels_,
+        "customer_levels": model._customer_levels_,
         "feature_cols": [
             "log_price_per_litre", "promotion_indicator", "week_sin", "week_cos",
+            "units_per_package_internal", "pack_size_internal",
+            "pack_type_internal", "customer",
         ],
+        "convergence": {
+            "rhat_max": rhat_max,
+            "ess_bulk_min": ess_min,
+            "divergences": n_div,
+        },
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
         "versions": {
             "python": sys.version.split()[0],
@@ -105,8 +137,8 @@ def main():
             "pandas": pd.__version__,
         },
     }
-    meta_path.write_text(json.dumps(metadata, indent=2))
-    print(f"  saved {nc_path} + {meta_path}")
+    meta_path.write_text(json.dumps(metadata, indent=2, default=str))
+    print(f"  saved {nc_path} + {meta_path} + {conv_path}")
     print("done.")
 
 

@@ -93,25 +93,33 @@ def tree_local_elasticity(
 def bayesian_elasticity(
     model, df_panel: pd.DataFrame | None = None
 ) -> pd.DataFrame:
-    """Extract SKU-level posterior; broadcast across customers."""
-    post = model.elasticity_posterior()  # per-SKU
-    if df_panel is None:
-        out = post.rename(
-            columns={
-                "beta_hdi_low": "beta_lo",
-                "beta_hdi_high": "beta_hi",
-            }
-        ).copy()
-        out["customer"] = "ALL"
-        out["method"] = "bayesian_hier"
-        return out[["product_sku_code", "customer", "beta_mean", "beta_lo", "beta_hi", "beta_std", "method"]]
-    panel = df_panel[["product_sku_code", "customer"]].drop_duplicates()
-    merged = panel.merge(post, on="product_sku_code", how="left")
-    merged = merged.rename(
+    """Extract per-cell posterior and broadcast to each SKU in that cell.
+
+    v6 model posts elasticity at the (top_brand, flavor_internal, pack_tier) cell
+    level. SKUs in the same cell share a beta. If ``df_panel`` is None, returns
+    the raw per-cell table (one row per cell).
+    """
+    post = model.elasticity_posterior()  # per-cell
+    post = post.rename(
         columns={"beta_hdi_low": "beta_lo", "beta_hdi_high": "beta_hi"}
     )
+    if df_panel is None:
+        out = post.copy()
+        out["customer"] = "ALL"
+        out["method"] = "bayesian_hier"
+        return out[[
+            "top_brand", "flavor_internal", "pack_tier", "n_skus_in_cell",
+            "customer", "beta_mean", "beta_lo", "beta_hi", "beta_std", "method",
+        ]]
+    keys = ["top_brand", "flavor_internal", "pack_tier"]
+    panel = df_panel[["product_sku_code", "customer"] + keys].drop_duplicates()
+    merged = panel.merge(post[keys + ["beta_mean", "beta_lo", "beta_hi", "beta_std"]],
+                         on=keys, how="left")
     merged["method"] = "bayesian_hier"
-    return merged[["product_sku_code", "customer", "beta_mean", "beta_lo", "beta_hi", "beta_std", "method"]]
+    return merged[[
+        "product_sku_code", "customer", "beta_mean", "beta_lo", "beta_hi",
+        "beta_std", "method",
+    ]]
 
 
 # ------------------------------------------------------------------
