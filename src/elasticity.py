@@ -44,10 +44,15 @@ def tree_local_elasticity(
     feature_cols: list[str],
     price_col: str | None = None,
     delta: float = 0.01,
+    predict_is_raw: bool = False,
 ) -> pd.DataFrame:
     """Numerical local elasticity: (d log_vol / d log_price) at each row,
     aggregated to (sku, customer) by median. Auto-detects whether the
-    price feature is on log scale or raw scale and perturbs accordingly."""
+    price feature is on log scale or raw scale and perturbs accordingly.
+
+    `predict_is_raw`: set True when the model returns raw volume (GLM / XGB
+    squaredlogerror); the function log-transforms predictions before the
+    finite-difference. Default False preserves the log-y contract."""
     if price_col is None or price_col not in feature_cols:
         if "log_price_per_litre" in feature_cols:
             price_col = "log_price_per_litre"
@@ -71,7 +76,9 @@ def tree_local_elasticity(
         log_price_delta = float(np.log1p(delta))
     y_up = model.predict(X_up)
 
-    # y is log_nielsen_total_volume, so (y_up - y_hat) / d(log_price) = elasticity
+    if predict_is_raw:
+        y_hat = np.log1p(np.clip(y_hat, 0, None))
+        y_up = np.log1p(np.clip(y_up, 0, None))
     local_elast = (y_up - y_hat) / log_price_delta
     tmp = pd.DataFrame(
         {

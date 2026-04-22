@@ -2,8 +2,14 @@
 
 `native categorical` is NOT used here -- cats are OHE/TE encoded upstream
 so the Pipeline can be pickled and reloaded with only sklearn/lgb installed.
-Monotone constraint on price_per_litre is preserved via dict form
-(LightGBM >= 4.0).
+Monotone constraint on price_per_litre is set after prep.fit discovers the
+post-encoding column order (LightGBM 4.x only accepts list form, not dict).
+
+Objective is switchable via `objective`:
+- `default` → regression (L2) on log-y
+- `poisson` → poisson on raw-y (log-link)
+- `tweedie` → tweedie on raw-y (log-link, power=1.5)
+- `gamma`   → gamma on raw-y (log-link, y>0)
 """
 from __future__ import annotations
 
@@ -17,6 +23,15 @@ from .preprocess import build_encoder
 from ..config import CATEGORICAL_COLS
 
 MONOTONIC_PRICE_FEAT = "price_per_litre"
+_TWEEDIE_POWER = 1.5
+
+_OBJ_MAP = {
+    "default": "regression",
+    "poisson": "poisson",
+    "tweedie": "tweedie",
+    "gamma":   "gamma",
+}
+_RAW_Y_OBJECTIVES = {"poisson", "tweedie", "gamma"}
 
 
 @dataclass
@@ -34,12 +49,21 @@ class LGBModel:
     random_state: int = 42
     n_jobs: int = -1
     early_stopping_rounds: int = 50
+    objective: str = "default"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
+        if self.objective not in _OBJ_MAP:
+            raise ValueError(
+                f"objective must be one of {tuple(_OBJ_MAP)}, got {self.objective!r}"
+            )
         self.pipeline_: Pipeline | None = None
         self.est_ = None
         self._feature_order_: list[str] | None = None
+
+    @property
+    def expects_raw_y(self) -> bool:
+        return self.objective in _RAW_Y_OBJECTIVES
 
     def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
@@ -55,7 +79,7 @@ class LGBModel:
             X[cols], cat_cols=cats, num_cols=nums,
             high_card_threshold=20, scale_numeric=False,
         )
-        model = lgb.LGBMRegressor(
+        kw = dict(
             num_leaves=self.num_leaves,
             max_depth=self.max_depth,
             learning_rate=self.learning_rate,
@@ -68,11 +92,15 @@ class LGBModel:
             n_estimators=self.n_estimators,
             random_state=self.random_state,
             n_jobs=self.n_jobs,
+            objective=_OBJ_MAP[self.objective],
             # monotone_constraints is set after prep is fit so we know the
             # post-encoding column order (LightGBM expects list form).
             monotone_constraints_method="intermediate",
             verbose=-1,
         )
+        if self.objective == "tweedie":
+            kw["tweedie_variance_power"] = _TWEEDIE_POWER
+        model = lgb.LGBMRegressor(**kw)
         return Pipeline([("prep", prep), ("model", model)])
 
     @staticmethod

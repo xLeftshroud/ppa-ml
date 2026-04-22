@@ -63,6 +63,16 @@ MODEL_CLASSES = {
 }
 PASSES_VAL = {"elastic_net": False, "rf": False, "xgb": True, "lgb": True}
 
+# Which --objective values each model supports. Argparse accepts the union;
+# we enforce per-model compatibility after parse.
+_MODEL_OBJ_SUPPORTED = {
+    "elastic_net": {"default", "poisson", "tweedie", "gamma"},
+    "xgb":         {"default", "squaredlogerror", "poisson", "tweedie", "gamma"},
+    "lgb":         {"default", "poisson", "tweedie", "gamma"},
+    "rf":          {"default", "poisson", "gamma"},
+}
+_RAW_Y_OBJECTIVES = {"squaredlogerror", "poisson", "tweedie", "gamma"}
+
 
 def load_and_engineer() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
@@ -111,11 +121,25 @@ def main():
         default="rmse",
         help="Optuna tuning objective (minimize). r2/r2_log are negated internally.",
     )
+    ap.add_argument(
+        "--objective",
+        default="default",
+        choices=["default", "squaredlogerror", "poisson", "tweedie", "gamma"],
+        help="Training loss. Per-model compatibility enforced after parse.",
+    )
     args = ap.parse_args()
 
     model_type = args.model
     model_cls = MODEL_CLASSES[model_type]
     passes_val = PASSES_VAL[model_type]
+
+    if args.objective not in _MODEL_OBJ_SUPPORTED[model_type]:
+        raise SystemExit(
+            f"{model_type} does not support --objective={args.objective}; "
+            f"choose from {sorted(_MODEL_OBJ_SUPPORTED[model_type])}"
+        )
+    expects_raw = args.objective in _RAW_Y_OBJECTIVES
+    objective_name = args.objective
 
     print(f"[1/6] Loading data + engineering features...")
     df_fe = load_and_engineer()
@@ -123,8 +147,14 @@ def main():
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)
     df_test = df_fe.iloc[test_idx].reset_index(drop=True)
     df_dev = df_dev.dropna(subset=["nielsen_total_volume"]).reset_index(drop=True)
-    y_dev = df_dev["log_nielsen_total_volume"].values
+    y_dev = df_dev["log_nielsen_total_volume"].values            # always log-space (for metrics)
+    y_raw = df_dev["nielsen_total_volume"].values.astype(float)  # raw volume (for GLM/squaredlogerror fit)
+    y_fit = y_raw if expects_raw else y_dev
+    if args.objective == "gamma":
+        # GammaRegressor requires y > 0; nudge zeros up to avoid fit error.
+        y_fit = np.maximum(y_fit, 1e-6)
     print(f"    dev rows={len(df_dev)}, sealed test rows={len(df_test)}")
+    print(f"    objective={args.objective}, y_space_trained_on={'raw_volume' if expects_raw else 'log_volume'}")
 
     print(f"[2/6] Feature selection pipeline...")
     feature_cols = pick_features(df_dev, model_type)
@@ -141,6 +171,8 @@ def main():
             max_trials=args.max_trials,
             storage=f"sqlite:///{OUTPUTS / 'optuna.db'}",
             metric=args.metric,
+            objective_name=objective_name,
+            y_fit=y_fit, expects_raw=expects_raw,
         )
         print(f"    best {args.metric}={tune['best_value']:.4f} in {tune['n_trials']} trials")
         best_params = tune["best_params"]
@@ -151,14 +183,19 @@ def main():
     print(f"[4/6] Refit across {len(args.seeds)} seeds x {len(folds)} folds...")
 
     def build(seed: int):
-        return model_cls(**best_params, random_state=seed, feature_cols=feature_cols)
+        return model_cls(
+            **best_params, random_state=seed, objective=objective_name,
+            feature_cols=feature_cols,
+        )
 
     metrics_df = run_across_seeds(
         build, df_dev, y_dev, feature_cols,
         seeds=args.seeds, passes_val=passes_val,
         model_name=model_type,
+        y_fit=y_fit, expects_raw=expects_raw,
     )
-    suffix = args.output_suffix
+    obj_tag = "" if args.objective == "default" else f"_{args.objective}"
+    suffix = f"{obj_tag}{args.output_suffix}"
     metrics_path = OUTPUTS / f"metrics_{model_type}{suffix}.csv"
     metrics_df.to_csv(metrics_path, index=False)
     print(f"    saved {metrics_path}")
@@ -192,11 +229,12 @@ def main():
                 **best_params,
                 n_estimators=ceiling,
                 random_state=args.seeds[0],
+                objective=objective_name,
                 feature_cols=feature_cols,
             )
             m_tmp.fit(
-                df_dev.iloc[tr_idx][feature_cols], y_dev[tr_idx],
-                X_val=df_dev.iloc[va_idx][feature_cols], y_val=y_dev[va_idx],
+                df_dev.iloc[tr_idx][feature_cols], y_fit[tr_idx],
+                X_val=df_dev.iloc[va_idx][feature_cols], y_val=y_fit[va_idx],
             )
             bi = getattr(m_tmp.est_, "best_iteration", None)
             if bi is None:
@@ -214,14 +252,17 @@ def main():
     champion = model_cls(
         **champion_params,
         random_state=args.seeds[0],
+        objective=objective_name,
         feature_cols=feature_cols,
     )
-    champion.fit(df_dev[feature_cols], y_dev)
+    champion.fit(df_dev[feature_cols], y_fit)
 
     if model_type == "elastic_net":
         elast = elastic_net_elasticity(champion, df_dev)
     else:
-        elast = tree_local_elasticity(champion, df_dev, feature_cols)
+        elast = tree_local_elasticity(
+            champion, df_dev, feature_cols, predict_is_raw=expects_raw,
+        )
     elast_path = OUTPUTS / f"elasticity_{model_type}{suffix}.csv"
     elast.to_csv(elast_path, index=False)
     print(f"    saved {elast_path}")
@@ -229,6 +270,9 @@ def main():
     # final test evaluation
     if len(df_test):
         test_pred = champion.predict(df_test[feature_cols])
+        if expects_raw:
+            # raw-volume pred -> log1p so metrics_table's internal expm1 recovers raw
+            test_pred = np.log1p(np.clip(test_pred, 0, None))
         test_metrics = metrics_table(df_test["log_nielsen_total_volume"].values, test_pred)
         print(f"    sealed-test metrics: {test_metrics}")
         (OUTPUTS / f"test_metrics_{model_type}{suffix}.json").write_text(
@@ -238,10 +282,9 @@ def main():
     model_path = OUTPUTS / f"model_{model_type}{suffix}.joblib"
     meta_path = OUTPUTS / f"metadata_{model_type}{suffix}.json"
 
-    # Save a self-contained sklearn TransformedTargetRegressor that returns
-    # raw nielsen_total_volume (not log). Callers need only sklearn+xgb+lgb
-    # installed -- no import of src.models.* required at load time.
-    y_raw = np.expm1(y_dev)
+    # Save a self-contained sklearn object that returns raw nielsen_total_volume.
+    # log-y model -> wrapped in TransformedTargetRegressor(log1p, expm1).
+    # raw-y model (GLM/squaredlogerror) -> bare Pipeline (predict already raw).
     export_champion(champion, df_dev[feature_cols], y_raw, model_path)
 
     versions = {
@@ -259,6 +302,9 @@ def main():
 
     metadata = {
         "model_type": model_type,
+        "objective": args.objective,
+        "expects_raw_y": expects_raw,
+        "y_space_trained_on": "raw_volume" if expects_raw else "log_volume",
         "feature_cols": list(feature_cols),
         "best_params": {
             k: (v if isinstance(v, (int, float, str, bool)) else str(v))
@@ -272,7 +318,7 @@ def main():
         "versions": versions,
         # Contract for downstream app consumers:
         "target": "nielsen_total_volume",
-        "target_transform": "log1p",
+        "target_transform": "log1p" if not expects_raw else "none",
         "predict_returns": "raw_volume",
         "schema_version": 2,
     }

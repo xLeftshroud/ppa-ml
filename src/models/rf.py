@@ -4,6 +4,13 @@ Class name `RFModel` is preserved so the training/tuning code keeps
 working, but the underlying estimator is HistGradientBoostingRegressor
 (sklearn >= 1.5 for dict-form monotonic_cst). Cats go through OHE/TE,
 not native categorical splits.
+
+Loss is switchable via `objective`:
+- `default` → squared_error on log-y
+- `poisson` → poisson on raw-y (log-link)
+- `gamma`   → gamma on raw-y (log-link, y>0)
+
+HGB does not support tweedie or squaredlogerror.
 """
 from __future__ import annotations
 
@@ -19,6 +26,13 @@ from ..config import CATEGORICAL_COLS
 
 MONOTONIC_PRICE_FEAT = "price_per_litre"
 
+_LOSS_MAP = {
+    "default": "squared_error",
+    "poisson": "poisson",
+    "gamma":   "gamma",
+}
+_RAW_Y_OBJECTIVES = {"poisson", "gamma"}
+
 
 @dataclass
 class RFModel:
@@ -28,12 +42,21 @@ class RFModel:
     learning_rate: float = 0.1
     l2_regularization: float = 0.0
     random_state: int = 42
+    objective: str = "default"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
+        if self.objective not in _LOSS_MAP:
+            raise ValueError(
+                f"objective must be one of {tuple(_LOSS_MAP)}, got {self.objective!r}"
+            )
         self.pipeline_: Pipeline | None = None
         self.est_: HistGradientBoostingRegressor | None = None
         self._feature_order_: list[str] | None = None
+
+    @property
+    def expects_raw_y(self) -> bool:
+        return self.objective in _RAW_Y_OBJECTIVES
 
     def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
@@ -48,6 +71,7 @@ class RFModel:
             high_card_threshold=20, scale_numeric=False,
         )
         model = HistGradientBoostingRegressor(
+            loss=_LOSS_MAP[self.objective],
             max_iter=self.max_iter,
             max_depth=self.max_depth,
             min_samples_leaf=self.min_samples_leaf,

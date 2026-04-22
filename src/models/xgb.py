@@ -4,6 +4,13 @@ Wrapped in a sklearn Pipeline whose preprocessor uses OneHot + TargetEncoder
 (no native categorical). The monotone constraint is anchored to the column
 name "price_per_litre" via XGB's dict form, which survives preprocessing
 because `verbose_feature_names_out=False` preserves numeric column names.
+
+Objective is switchable via `objective`:
+- `default`         → reg:squarederror on log-y
+- `squaredlogerror` → reg:squaredlogerror on raw-y (XGB log1p's internally)
+- `poisson`         → count:poisson on raw-y (log-link)
+- `tweedie`         → reg:tweedie on raw-y (log-link, power=1.5)
+- `gamma`           → reg:gamma on raw-y (log-link, y>0)
 """
 from __future__ import annotations
 
@@ -18,6 +25,16 @@ from .preprocess import build_encoder
 from ..config import CATEGORICAL_COLS
 
 MONOTONIC_PRICE_FEAT = "price_per_litre"
+_TWEEDIE_POWER = 1.5
+
+_OBJ_MAP = {
+    "default":         "reg:squarederror",
+    "squaredlogerror": "reg:squaredlogerror",
+    "poisson":         "count:poisson",
+    "tweedie":         "reg:tweedie",
+    "gamma":           "reg:gamma",
+}
+_RAW_Y_OBJECTIVES = {"squaredlogerror", "poisson", "tweedie", "gamma"}
 
 
 @dataclass
@@ -34,12 +51,21 @@ class XGBModel:
     random_state: int = 42
     n_jobs: int = -1
     early_stopping_rounds: int = 50
+    objective: str = "default"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
+        if self.objective not in _OBJ_MAP:
+            raise ValueError(
+                f"objective must be one of {tuple(_OBJ_MAP)}, got {self.objective!r}"
+            )
         self.pipeline_: Pipeline | None = None
         self.est_: xgb.XGBRegressor | None = None
         self._feature_order_: list[str] | None = None
+
+    @property
+    def expects_raw_y(self) -> bool:
+        return self.objective in _RAW_Y_OBJECTIVES
 
     def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
@@ -53,7 +79,7 @@ class XGBModel:
             X[cols], cat_cols=cats, num_cols=nums,
             high_card_threshold=20, scale_numeric=False,
         )
-        model = xgb.XGBRegressor(
+        kw = dict(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
             learning_rate=self.learning_rate,
@@ -66,8 +92,12 @@ class XGBModel:
             random_state=self.random_state,
             n_jobs=self.n_jobs,
             tree_method="hist",
+            objective=_OBJ_MAP[self.objective],
             monotone_constraints={MONOTONIC_PRICE_FEAT: -1},
         )
+        if self.objective == "tweedie":
+            kw["tweedie_variance_power"] = _TWEEDIE_POWER
+        model = xgb.XGBRegressor(**kw)
         return Pipeline([("prep", prep), ("model", model)])
 
     def fit(
