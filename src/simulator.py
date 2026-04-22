@@ -87,6 +87,3 @@ class Simulator:
         df["sign_ok"] = np.sign(-df["price_change_pct"]) == np.sign(df["volume_lift_pct"])
         df["volume_nonneg"] = df["scenario_volume"] >= 0
         return df
-
-    def flag_extrapolation(self, new_price: float) -> bool:
-        return not (self._price_p5 <= new_price <= self._price_p95)

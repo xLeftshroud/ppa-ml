@@ -5,6 +5,9 @@ Usage:
 """
 from __future__ import annotations
 
+import time
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -100,10 +103,10 @@ def _make_fs_estimator(model_type: str, random_state: int):
             verbose=-1,
         )
     if model_type == "rf":
-        from sklearn.ensemble import RandomForestRegressor
-        return RandomForestRegressor(
-            n_estimators=200,
-            n_jobs=-1,
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        return HistGradientBoostingRegressor(
+            max_iter=200,
+            learning_rate=0.1,
             random_state=random_state,
         )
     raise ValueError(f"Unsupported model_type: {model_type}")
@@ -142,6 +145,7 @@ def borutashap_select(
     hits = {c: 0 for c in feature_cols}
 
     for trial in range(n_trials):
+        t0 = time.time()
         trial_seed = int(rng.integers(0, 1_000_000))
         perm = np.random.default_rng(trial_seed)
         shadow = pd.DataFrame(
@@ -155,8 +159,14 @@ def borutashap_select(
         try:
             explainer = shap.TreeExplainer(est)
             shap_vals = explainer.shap_values(X_aug)
-        except Exception:
-            # Fallback: permutation-style importance via built-in feature_importances_
+        except Exception as e:
+            warnings.warn(
+                f"[boruta] trial {trial+1}: SHAP failed "
+                f"({type(e).__name__}: {e}); falling back to feature_importances_ "
+                "(HistGBR returns zeros)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             importances = np.asarray(getattr(est, "feature_importances_", np.zeros(X_aug.shape[1])))
             imp_series = pd.Series(importances, index=X_aug.columns)
         else:
@@ -168,6 +178,9 @@ def borutashap_select(
         for c in feature_cols:
             if float(imp_series[c]) > max_shadow:
                 hits[c] += 1
+
+        if trial == 0 or (trial + 1) % 5 == 0 or trial + 1 == n_trials:
+            print(f"    [boruta] trial {trial+1}/{n_trials} took {time.time()-t0:.1f}s")
 
     accepted: list[str] = []
     for c in feature_cols:

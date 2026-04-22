@@ -7,7 +7,6 @@ OUTPUTS = ROOT / "outputs"
 OUTPUTS.mkdir(exist_ok=True)
 
 SEEDS = [42, 123, 456]
-N_FOLDS = 3
 N_SPLITS = 3
 TEST_WEEK_RATIO = 0.20
 TUNING_WALLCLOCK_SEC = 3600
