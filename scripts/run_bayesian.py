@@ -18,6 +18,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import numpyro
+# Must be set before any jax/numpyro computation; enables true parallel chains on CPU.
+numpyro.set_host_device_count(2)
+
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -97,10 +101,8 @@ def main():
     if df_val is not None and len(df_val):
         val_pred = model.predict(df_val)
         m = metrics_table(df_val["log_nielsen_total_volume"].values, val_pred, train_time_sec=dur)
-        (OUTPUTS / f"metrics_hier_bayes{suffix}.json").write_text(json.dumps(m, indent=2))
+        (OUTPUTS / f"test_metrics_hier_bayes{suffix}.json").write_text(json.dumps(m, indent=2))
         print(f"  val metrics: {m}")
-
-    import numpyro
 
     nc_path = OUTPUTS / f"model_hier_bayes{suffix}.nc"
     meta_path = OUTPUTS / f"metadata_hier_bayes{suffix}.json"
@@ -116,12 +118,10 @@ def main():
         "flavor_codes": model._flavor_codes_,
         "pack_codes": model._pack_codes_,
         "cell_keys": [list(k) for k in model._cell_keys_],
-        "pack_type_levels": model._pack_type_levels_,
         "customer_levels": model._customer_levels_,
         "feature_cols": [
             "log_price_per_litre", "promotion_indicator", "week_sin", "week_cos",
-            "units_per_package_internal", "pack_size_internal",
-            "pack_type_internal", "customer",
+            "units_per_package_internal", "customer",
         ],
         "convergence": {
             "rhat_max": rhat_max,

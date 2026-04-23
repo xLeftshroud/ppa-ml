@@ -18,9 +18,12 @@ pack, log pack size, pack_type dummies, customer dummies).
 All hierarchies are non-centered to avoid Neal's funnel.
 
 Prior sensitivity (``prior_scale``):
-    weak     -> mu_global ~ Normal(0,5),  sigma_* inflated
-    moderate -> mu_global ~ Normal(-2,1), sigma_* nominal         (default)
-    strong   -> mu_global ~ Normal(-2,0.5), sigma_* shrunk
+    weak     -> mu_global ~ Normal(0, 5),   sigma_* inflated
+    moderate -> mu_global ~ Normal(0.5, 1), sigma_* nominal        (default)
+    strong   -> mu_global ~ Normal(0.5, 0.5), sigma_* shrunk
+
+Prior-mean own-price elasticity = -exp(mu_loc): moderate -> -exp(0.5) ~ -1.65,
+matching the -1.5..-3 beverage-category consensus in the literature.
 """
 from __future__ import annotations
 
@@ -32,18 +35,16 @@ import pandas as pd
 
 
 PRIOR_CONFIGS: dict[str, dict] = {
-    "weak":     {"mu_loc": 0.0,  "mu_scale": 5.0, "sigma_scale": 2.0},
-    "moderate": {"mu_loc": -2.0, "mu_scale": 1.0, "sigma_scale": 1.0},
-    "strong":   {"mu_loc": -2.0, "mu_scale": 0.5, "sigma_scale": 0.5},
+    "weak":     {"mu_loc": 0.0, "mu_scale": 5.0, "sigma_scale": 2.0},
+    "moderate": {"mu_loc": 0.5, "mu_scale": 1.0, "sigma_scale": 1.0},
+    "strong":   {"mu_loc": 0.5, "mu_scale": 0.5, "sigma_scale": 0.5},
 }
 
 BRAND_COL = "top_brand"
 FLAVOR_COL = "flavor_internal"
 PACK_COL = "pack_tier"
-PACK_TYPE_COL = "pack_type_internal"
 CUSTOMER_COL = "customer"
 UNITS_COL = "units_per_package_internal"
-SIZE_COL = "pack_size_internal"
 
 
 @dataclass
@@ -68,7 +69,6 @@ class BayesianHierModel:
         self._cell_to_flavor_: np.ndarray | None = None
         self._cell_to_pack_: np.ndarray | None = None
         # covariate encoders
-        self._pack_type_levels_: list[str] | None = None
         self._customer_levels_: list[str] | None = None
         # cached posterior means (for predict)
         self._alpha_cell_mean_: np.ndarray | None = None
@@ -81,8 +81,6 @@ class BayesianHierModel:
         self._delta_sin_mean_: float = 0.0
         self._delta_cos_mean_: float = 0.0
         self._theta_units_mean_: float = 0.0
-        self._theta_size_mean_: float = 0.0
-        self._theta_packtype_mean_: np.ndarray | None = None
         self._theta_customer_mean_: np.ndarray | None = None
         # per-cell SKU counts (for reporting)
         self._cell_n_skus_: dict | None = None
@@ -117,13 +115,6 @@ class BayesianHierModel:
             [self._pack_codes_[p] for (_, _, p) in self._cell_keys_], dtype=np.int32
         )
 
-        # pack_type dummy levels (first category as reference)
-        if PACK_TYPE_COL in df.columns:
-            pt_cat = pd.Categorical(df[PACK_TYPE_COL])
-            self._pack_type_levels_ = list(pt_cat.categories)
-        else:
-            self._pack_type_levels_ = []
-
         # customer dummy levels (first category as reference)
         if CUSTOMER_COL in df.columns:
             c_cat = pd.Categorical(df[CUSTOMER_COL])
@@ -149,16 +140,6 @@ class BayesianHierModel:
         )
         return cell_idx
 
-    def _encode_pack_type_dummies(self, df: pd.DataFrame) -> np.ndarray:
-        """Return (n_rows, n_levels-1) dummy matrix; first level is reference."""
-        if not self._pack_type_levels_ or len(self._pack_type_levels_) < 2:
-            return np.zeros((len(df), 0), dtype=np.float32)
-        dummies = np.zeros((len(df), len(self._pack_type_levels_) - 1), dtype=np.float32)
-        vals = df[PACK_TYPE_COL].values
-        for j, lvl in enumerate(self._pack_type_levels_[1:]):
-            dummies[:, j] = (vals == lvl).astype(np.float32)
-        return dummies
-
     def _encode_customer_idx(self, df: pd.DataFrame) -> np.ndarray:
         """Return (n_rows,) int array of customer index in self._customer_levels_.
         Unknown customer -> 0 (reference)."""
@@ -180,8 +161,6 @@ class BayesianHierModel:
         week_sin,
         week_cos,
         log_units,
-        log_size,
-        pack_type_dum,
         customer_idx,
         n_customer,
         y=None,
@@ -196,7 +175,6 @@ class BayesianHierModel:
         n_flavor = len(self._flavor_codes_)
         n_pack = len(self._pack_codes_)
         n_cell = len(self._cell_codes_)
-        n_pt_dum = pack_type_dum.shape[1]
 
         cell_to_brand = jnp.array(self._cell_to_brand_)
         cell_to_flavor = jnp.array(self._cell_to_flavor_)
@@ -219,13 +197,14 @@ class BayesianHierModel:
         )
         mu_brand = numpyro.deterministic("mu_brand", mu_global + sigma_brand * mu_brand_raw)
 
+        # sum-to-zero on crossed effects to remove additive redundancy with mu_brand
         alpha_flavor_raw = numpyro.sample(
-            "alpha_flavor_raw", dist.Normal(0.0, 1.0).expand([n_flavor]).to_event(1)
+            "alpha_flavor_raw", dist.ZeroSumNormal(1.0, event_shape=(n_flavor,))
         )
         alpha_flavor = numpyro.deterministic("alpha_flavor", sigma_flavor * alpha_flavor_raw)
 
         alpha_pack_raw = numpyro.sample(
-            "alpha_pack_raw", dist.Normal(0.0, 1.0).expand([n_pack]).to_event(1)
+            "alpha_pack_raw", dist.ZeroSumNormal(1.0, event_shape=(n_pack,))
         )
         alpha_pack = numpyro.deterministic("alpha_pack", sigma_pack * alpha_pack_raw)
 
@@ -266,16 +245,9 @@ class BayesianHierModel:
         delta_cos = numpyro.sample("delta_cos", dist.Normal(0.0, 1.0))
 
         # ---------- optional intercept-shift covariates ----------
+        # pack_tier already absorbs size/format structure via alpha_pack;
+        # only units-per-pack (multi-pack count) is kept as an orthogonal control.
         theta_units = numpyro.sample("theta_units", dist.Normal(0.0, 1.0))
-        theta_size = numpyro.sample("theta_size", dist.Normal(0.0, 1.0))
-
-        if n_pt_dum > 0:
-            theta_packtype = numpyro.sample(
-                "theta_packtype", dist.Normal(0.0, 1.0).expand([n_pt_dum]).to_event(1)
-            )
-            pt_contrib = pack_type_dum @ theta_packtype
-        else:
-            pt_contrib = 0.0
 
         if n_customer > 1:
             # reference category gets 0; sample n_customer-1 offsets
@@ -301,8 +273,6 @@ class BayesianHierModel:
             + delta_sin * week_sin
             + delta_cos * week_cos
             + theta_units * log_units
-            + theta_size * log_size
-            + pt_contrib
             + cust_contrib
         )
         numpyro.sample("obs", dist.Normal(mu, sigma_y), obs=y)
@@ -327,13 +297,6 @@ class BayesianHierModel:
             if UNITS_COL in df.columns else np.zeros(len(df), dtype=np.float32),
             dtype=jnp.float32,
         )
-        size_arr = (
-            df[SIZE_COL].to_numpy().astype(np.float32)
-            if SIZE_COL in df.columns else np.ones(len(df), dtype=np.float32)
-        )
-        log_size = jnp.array(np.log(np.maximum(size_arr, 1e-6)), dtype=jnp.float32)
-        pt_dum_np = self._encode_pack_type_dummies(df)
-        pt_dum = jnp.array(pt_dum_np, dtype=jnp.float32)
         cust_idx_np = self._encode_customer_idx(df)
         cust_idx = jnp.array(cust_idx_np, dtype=jnp.int32)
         n_customer = max(len(self._customer_levels_), 1)
@@ -358,8 +321,6 @@ class BayesianHierModel:
             wsin,
             wcos,
             log_units,
-            log_size,
-            pt_dum,
             cust_idx,
             n_customer,
             y_arr,
@@ -400,11 +361,6 @@ class BayesianHierModel:
         self._delta_sin_mean_ = float(self.samples_["delta_sin"].mean())
         self._delta_cos_mean_ = float(self.samples_["delta_cos"].mean())
         self._theta_units_mean_ = float(self.samples_["theta_units"].mean())
-        self._theta_size_mean_ = float(self.samples_["theta_size"].mean())
-        if "theta_packtype" in self.samples_:
-            self._theta_packtype_mean_ = self.samples_["theta_packtype"].mean(axis=0)
-        else:
-            self._theta_packtype_mean_ = np.zeros(0)
         if "theta_customer" in self.samples_:
             self._theta_customer_mean_ = self.samples_["theta_customer"].mean(axis=0)
         else:
@@ -462,17 +418,6 @@ class BayesianHierModel:
             np.log1p(df[UNITS_COL].to_numpy().astype(float))
             if UNITS_COL in df.columns else np.zeros(n)
         )
-        size_arr = (
-            df[SIZE_COL].to_numpy().astype(float)
-            if SIZE_COL in df.columns else np.ones(n)
-        )
-        log_size = np.log(np.maximum(size_arr, 1e-6))
-
-        pt_dum = self._encode_pack_type_dummies(df)
-        if pt_dum.shape[1] > 0 and self._theta_packtype_mean_.shape[0] == pt_dum.shape[1]:
-            pt_contrib = pt_dum @ self._theta_packtype_mean_
-        else:
-            pt_contrib = np.zeros(n)
 
         cust_idx = self._encode_customer_idx(df)
         if self._theta_customer_mean_.shape[0] >= max(len(self._customer_levels_), 1):
@@ -487,8 +432,6 @@ class BayesianHierModel:
             + self._delta_sin_mean_ * wsin
             + self._delta_cos_mean_ * wcos
             + self._theta_units_mean_ * log_units
-            + self._theta_size_mean_ * log_size
-            + pt_contrib
             + cust_contrib
         )
 
@@ -502,13 +445,16 @@ class BayesianHierModel:
                  beta_mean, beta_median, beta_hdi_low, beta_hdi_high, beta_std.
         """
         import arviz as az
+        import inspect
 
         assert self.samples_ is not None, "call fit() first"
+        # new arviz (>=0.22) renamed `hdi_prob` to `prob`
+        hdi_kw = "prob" if "prob" in inspect.signature(az.hdi).parameters else "hdi_prob"
         beta = self.samples_["beta_cell"]  # (draws, n_cell)
         rows = []
         for (b, f, p), idx in self._cell_codes_.items():
             post = beta[:, idx]
-            hdi = az.hdi(post, hdi_prob=0.95)
+            hdi = az.hdi(post, **{hdi_kw: 0.95})
             rows.append(
                 {
                     "top_brand": b,
@@ -545,7 +491,6 @@ class BayesianHierModel:
             "delta_sin",
             "delta_cos",
             "theta_units",
-            "theta_size",
             "sigma_y",
         ]
         available = [
