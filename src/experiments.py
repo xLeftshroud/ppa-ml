@@ -25,32 +25,41 @@ def run_across_seeds(
     seeds: list[int] | None = None,
     passes_val: bool = False,
     model_name: str = "model",
+    y_fit: np.ndarray | None = None,
+    expects_raw: bool = False,
 ) -> pd.DataFrame:
     """Train `build_model(seed)` on each (seed, fold); return metrics DataFrame.
 
-    Rows: one per (seed, fold). Columns: seed, fold, wmape, rmse_log, rmse,
-    rmsle, mape, smape, r2, r2_log, train_time_sec.
+    `y_dev` is always log-scale (used by metrics_table). If the model was
+    trained on raw volume (GLM objectives / XGB squaredlogerror), pass
+    `y_fit=raw_volume_array` and `expects_raw=True`; the model's raw
+    predictions are log1p'd before metrics so metrics_table sees log-space
+    inputs and its raw-volume output columns stay comparable.
     """
     seeds = seeds or SEEDS
     folds = expanding_window_cv(df_dev)
+    y_for_fit = y_fit if y_fit is not None else y_dev
     rows = []
     for seed in seeds:
         for fi, (tr_idx, va_idx) in enumerate(folds, start=1):
             X_tr = df_dev.iloc[tr_idx][feature_cols]
-            y_tr = y_dev[tr_idx]
+            y_tr = y_for_fit[tr_idx]
             X_va = df_dev.iloc[va_idx][feature_cols]
-            y_va = y_dev[va_idx]
+            y_va_fit = y_for_fit[va_idx]
+            y_va_log = y_dev[va_idx]
 
             model = build_model(seed)
             t0 = time.perf_counter()
             if passes_val:
-                model.fit(X_tr, y_tr, X_val=X_va, y_val=y_va)
+                model.fit(X_tr, y_tr, X_val=X_va, y_val=y_va_fit)
             else:
                 model.fit(X_tr, y_tr)
             train_time = time.perf_counter() - t0
 
-            y_pred_log = model.predict(X_va)
-            m = metrics_table(y_va, y_pred_log, train_time_sec=train_time)
+            pred = model.predict(X_va)
+            if expects_raw:
+                pred = np.log1p(np.clip(pred, 0, None))
+            m = metrics_table(y_va_log, pred, train_time_sec=train_time)
             m.update({"model": model_name, "seed": seed, "fold": fi})
             rows.append(m)
     return pd.DataFrame(rows)

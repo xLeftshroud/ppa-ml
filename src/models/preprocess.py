@@ -1,113 +1,69 @@
-"""Shared preprocessing: train target encoder for linear models,
-cast categoricals for tree models. One place, reused by all 5 model adapters.
+"""Shared preprocessing for all 4 models.
+
+Public entry point: `build_encoder(...)` returns a sklearn ColumnTransformer
+that dispatches low-cardinality cats to OneHotEncoder and high-cardinality
+cats to TargetEncoder, with optional StandardScaler on numerics.
+
+Use inside a sklearn Pipeline so the saved model is a pure sklearn object
+(no custom classes in the pickled artifact).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable
-
-import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, TargetEncoder
 
 
-@dataclass
-class LinearPreprocessor:
-    """Categorical encoder + numeric standardizer for linear models.
+def build_encoder(
+    X_sample: pd.DataFrame,
+    cat_cols: list[str],
+    num_cols: list[str],
+    high_card_threshold: int = 20,
+    scale_numeric: bool = False,
+    te_smooth: float = 20.0,
+) -> ColumnTransformer:
+    """Build a ColumnTransformer that splits cats by cardinality.
 
-    Categoricals are split by cardinality:
-    - nunique <= high_card_threshold -> one-hot (drop_first=True)
-    - nunique >  high_card_threshold -> smoothed target encoding
+    - cats with nunique <= high_card_threshold -> OneHotEncoder(drop="first")
+    - cats with nunique >  high_card_threshold -> TargetEncoder(smooth=20)
+    - nums passthrough by default; scale_numeric=True adds StandardScaler
+      (needed for linear models, not for trees).
 
-    TE is deliberately avoided for low-card cats in linear models because the
-    encoded column's variance scales with y and crowds out the price coefficient
-    under L1/L2 penalty; one-hot keeps the cat effect on a bounded 0/1 scale.
+    `verbose_feature_names_out=False` keeps numeric column names unchanged
+    (e.g. "price_per_litre" stays as-is through passthrough), so tree
+    models can anchor monotone constraints to stable names.
     """
-    cat_cols: list[str] = field(default_factory=list)
-    num_cols: list[str] = field(default_factory=list)
-    high_card_threshold: int = 20
-    smoothing: float = 20.0
+    cat_cols = [c for c in cat_cols if c in X_sample.columns]
+    num_cols = [c for c in num_cols if c in X_sample.columns]
 
-    _te_maps: dict[str, dict] = field(default_factory=dict)
-    _te_global: float = 0.0
-    _num_mean: pd.Series = None
-    _num_std: pd.Series = None
-    _low_card_: list[str] = field(default_factory=list)
-    _high_card_: list[str] = field(default_factory=list)
-    _dummy_cols_: list[str] = field(default_factory=list)
+    low_card = [c for c in cat_cols
+                if X_sample[c].nunique(dropna=False) <= high_card_threshold]
+    high_card = [c for c in cat_cols if c not in low_card]
 
-    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "LinearPreprocessor":
-        self._te_global = float(np.mean(y))
+    transformers = []
+    if num_cols:
+        transformers.append(
+            ("num", StandardScaler() if scale_numeric else "passthrough", num_cols)
+        )
+    if low_card:
+        transformers.append((
+            "cat_low",
+            OneHotEncoder(drop="first", handle_unknown="ignore", sparse_output=False),
+            low_card,
+        ))
+    if high_card:
+        transformers.append((
+            "cat_high",
+            TargetEncoder(target_type="continuous", smooth=te_smooth),
+            high_card,
+        ))
 
-        low, high = [], []
-        for c in self.cat_cols:
-            if c not in X.columns:
-                continue
-            if X[c].nunique(dropna=False) <= self.high_card_threshold:
-                low.append(c)
-            else:
-                high.append(c)
-        self._low_card_ = low
-        self._high_card_ = high
-
-        # smoothed target encoding for high-card cats only
-        for c in self._high_card_:
-            grp = pd.DataFrame({c: X[c].values, "_y": y}).groupby(c)["_y"]
-            counts = grp.count()
-            means = grp.mean()
-            smooth = (counts * means + self.smoothing * self._te_global) / (
-                counts + self.smoothing
-            )
-            self._te_maps[c] = smooth.to_dict()
-
-        # one-hot dummy schema from low-card cats
-        if self._low_card_:
-            dummies = pd.get_dummies(
-                X[self._low_card_], drop_first=True, dummy_na=False
-            ).astype(float)
-            self._dummy_cols_ = list(dummies.columns)
-        else:
-            self._dummy_cols_ = []
-
-        num = [c for c in self.num_cols if c in X.columns]
-        self._num_mean = X[num].mean()
-        self._num_std = X[num].std().replace(0, 1.0)
-        return self
-
-    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        out = pd.DataFrame(index=X.index)
-
-        num = [c for c in self.num_cols if c in X.columns]
-        if num:
-            out[num] = (X[num] - self._num_mean[num]) / self._num_std[num]
-
-        for c in self._high_card_:
-            if c not in X.columns:
-                continue
-            mapped = X[c].map(self._te_maps.get(c, {}))
-            out[f"te_{c}"] = mapped.fillna(self._te_global).astype(float)
-
-        if self._low_card_:
-            present = [c for c in self._low_card_ if c in X.columns]
-            if present:
-                dummies = pd.get_dummies(
-                    X[present], drop_first=True, dummy_na=False
-                ).astype(float)
-            else:
-                dummies = pd.DataFrame(index=X.index)
-            dummies = dummies.reindex(columns=self._dummy_cols_, fill_value=0.0)
-            out = pd.concat([out, dummies], axis=1)
-
-        return out.fillna(0.0)
-
-    def fit_transform(self, X: pd.DataFrame, y: np.ndarray) -> pd.DataFrame:
-        self.fit(X, y)
-        return self.transform(X)
-
-
-def cast_categoricals(df: pd.DataFrame, cat_cols: Iterable[str]) -> pd.DataFrame:
-    """Cast to pandas category dtype so lightgbm/xgboost recognize natively."""
-    out = df.copy()
-    for c in cat_cols:
-        if c in out.columns:
-            out[c] = out[c].astype("category")
-    return out
+    ct = ColumnTransformer(
+        transformers=transformers,
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+    # Emit DataFrames so downstream estimators (XGB/LGB/HGB) can resolve
+    # column-name-keyed params like monotone_constraints={"price_per_litre": -1}.
+    ct.set_output(transform="pandas")
+    return ct

@@ -102,11 +102,14 @@ def critical_difference_diagram(
 
     wide = _pivot_observations(metrics_df, metric)
     avg_ranks = wide.rank(axis=1, method="average").mean()
+    sig = sp.posthoc_nemenyi_friedman(wide.values)
+    sig.index = list(wide.columns)
+    sig.columns = list(wide.columns)
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 2.5))
     sp.critical_difference_diagram(
         ranks=avg_ranks,
-        sig_matrix=sp.posthoc_nemenyi_friedman(wide.values),
+        sig_matrix=sig,
         ax=ax,
         label_fmt_left="{label} ({rank:.2f})",
         label_fmt_right="({rank:.2f}) {label}",

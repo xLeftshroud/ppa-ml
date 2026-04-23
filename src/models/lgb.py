@@ -1,9 +1,15 @@
-"""LightGBM regressor with native categorical handling.
+"""LightGBM regressor wrapped in a sklearn Pipeline with OHE + TargetEncoder.
 
-Unlike XGBoost, LightGBM's native categorical splits are particularly
-effective on high-cardinality categoricals like 379-level product_sku_code
-and 55-level flavor -- it uses the Fisher (1958) optimal split rather than
-one-hot.
+`native categorical` is NOT used here -- cats are OHE/TE encoded upstream
+so the Pipeline can be pickled and reloaded with only sklearn/lgb installed.
+Monotone constraint on price_per_litre is set after prep.fit discovers the
+post-encoding column order (LightGBM 4.x only accepts list form, not dict).
+
+Objective is switchable via `objective`:
+- `default` → regression (L2) on log-y
+- `poisson` → poisson on raw-y (log-link)
+- `tweedie` → tweedie on raw-y (log-link, power=1.5)
+- `gamma`   → gamma on raw-y (log-link, y>0)
 """
 from __future__ import annotations
 
@@ -11,11 +17,21 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from sklearn.pipeline import Pipeline
 
-from .preprocess import cast_categoricals
+from .preprocess import build_encoder
 from ..config import CATEGORICAL_COLS
 
 MONOTONIC_PRICE_FEAT = "price_per_litre"
+_TWEEDIE_POWER = 1.5
+
+_OBJ_MAP = {
+    "default": "regression",
+    "poisson": "poisson",
+    "tweedie": "tweedie",
+    "gamma":   "gamma",
+}
+_RAW_Y_OBJECTIVES = {"poisson", "tweedie", "gamma"}
 
 
 @dataclass
@@ -33,35 +49,37 @@ class LGBModel:
     random_state: int = 42
     n_jobs: int = -1
     early_stopping_rounds: int = 50
+    objective: str = "default"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
+        if self.objective not in _OBJ_MAP:
+            raise ValueError(
+                f"objective must be one of {tuple(_OBJ_MAP)}, got {self.objective!r}"
+            )
+        self.pipeline_: Pipeline | None = None
         self.est_ = None
         self._feature_order_: list[str] | None = None
-        self._cat_cols_: list[str] | None = None
 
-    def _prepare(self, X: pd.DataFrame) -> pd.DataFrame:
-        cols = self.feature_cols or list(X.columns)
+    @property
+    def expects_raw_y(self) -> bool:
+        return self.objective in _RAW_Y_OBJECTIVES
+
+    def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
-        self._cat_cols_ = cats
-        return cast_categoricals(X[cols], cats)
+        nums = [c for c in cols if c not in cats]
+        return nums, cats
 
-    def _build_monotone(self, feature_order: list[str]) -> list[int]:
-        return [-1 if f == MONOTONIC_PRICE_FEAT else 0 for f in feature_order]
-
-    def fit(
-        self,
-        X: pd.DataFrame,
-        y: np.ndarray,
-        X_val: pd.DataFrame | None = None,
-        y_val: np.ndarray | None = None,
-    ) -> "LGBModel":
+    def _build(self, X: pd.DataFrame) -> Pipeline:
         import lightgbm as lgb
 
-        Xp = self._prepare(X)
-        self._feature_order_ = list(Xp.columns)
-        mono = self._build_monotone(self._feature_order_)
-        self.est_ = lgb.LGBMRegressor(
+        cols = self.feature_cols or list(X.columns)
+        nums, cats = self._split_cols(cols)
+        prep = build_encoder(
+            X[cols], cat_cols=cats, num_cols=nums,
+            high_card_threshold=20, scale_numeric=False,
+        )
+        kw = dict(
             num_leaves=self.num_leaves,
             max_depth=self.max_depth,
             learning_rate=self.learning_rate,
@@ -74,23 +92,58 @@ class LGBModel:
             n_estimators=self.n_estimators,
             random_state=self.random_state,
             n_jobs=self.n_jobs,
-            monotone_constraints=mono,
+            objective=_OBJ_MAP[self.objective],
+            # monotone_constraints is set after prep is fit so we know the
+            # post-encoding column order (LightGBM expects list form).
             monotone_constraints_method="intermediate",
             verbose=-1,
         )
-        fit_kwargs = {"categorical_feature": self._cat_cols_}
+        if self.objective == "tweedie":
+            kw["tweedie_variance_power"] = _TWEEDIE_POWER
+        model = lgb.LGBMRegressor(**kw)
+        return Pipeline([("prep", prep), ("model", model)])
+
+    @staticmethod
+    def _monotone_list(feature_names: list[str]) -> list[int]:
+        return [-1 if f == MONOTONIC_PRICE_FEAT else 0 for f in feature_names]
+
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: np.ndarray,
+        X_val: pd.DataFrame | None = None,
+        y_val: np.ndarray | None = None,
+    ) -> "LGBModel":
+        import lightgbm as lgb
+
+        cols = self.feature_cols or list(X.columns)
+        X = X[cols]
+        self.pipeline_ = self._build(X)
+        prep = self.pipeline_.named_steps["prep"]
+        model = self.pipeline_.named_steps["model"]
+
+        prep.fit(X, y)
+        feat_names = list(prep.get_feature_names_out())
+        model.set_params(monotone_constraints=self._monotone_list(feat_names))
+        Xp = prep.transform(X)
+
         if X_val is not None and y_val is not None:
-            Xvp = self._prepare(X_val).reindex(columns=self._feature_order_)
-            fit_kwargs["eval_set"] = [(Xvp, y_val)]
-            fit_kwargs["callbacks"] = [
-                lgb.early_stopping(self.early_stopping_rounds, verbose=False)
-            ]
-        self.est_.fit(Xp, y, **fit_kwargs)
+            Xvp = prep.transform(X_val[cols])
+            model.fit(
+                Xp, y,
+                eval_set=[(Xvp, y_val)],
+                callbacks=[lgb.early_stopping(self.early_stopping_rounds, verbose=False)],
+            )
+        else:
+            model.fit(Xp, y)
+
+        self.est_ = model
+        self._feature_order_ = feat_names
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        Xp = self._prepare(X).reindex(columns=self._feature_order_)
-        return self.est_.predict(Xp)
+        cols = self.feature_cols or list(X.columns)
+        return self.pipeline_.predict(X[cols])
 
     @property
     def feature_importance_(self) -> pd.Series:

@@ -35,45 +35,66 @@ _MAXIMIZE = {"r2", "r2_log"}   # Optuna minimizes → negate these
 
 
 def _mean_cv_score(
-    model_builder, df_dev, y_dev, folds, feature_cols,
+    trial, model_builder, df_dev, y_dev, folds, feature_cols,
     passes_val=False, metric="rmse",
+    y_fit=None, expects_raw=False,
 ):
     """Train model on each fold's train, predict on val, return mean `metric`.
 
-    Uses `metrics_table` to compute all metrics in one pass; extracts the
-    requested one. r2 / r2_log are maximized → negated so Optuna can minimize.
+    `y_dev` is always log-scale (for metrics). When the model trains on raw
+    volume (GLM objectives / XGB squaredlogerror), pass `y_fit=raw_y` and
+    `expects_raw=True`. Raw predictions are log1p'd so metrics_table's
+    internal expm1 recovers raw values for the output columns.
+
+    r2 / r2_log are maximized → negated so Optuna can minimize.
+
+    Reports the running mean score to Optuna after each fold so the study's
+    pruner can kill obviously-bad trials before all folds run.
     """
+    import optuna  # local import keeps tuning module import cheap
+
     if metric not in SUPPORTED_METRICS:
         raise ValueError(
             f"unsupported metric: {metric}. Choose from {SUPPORTED_METRICS}"
         )
+    y_for_fit = y_fit if y_fit is not None else y_dev
     scores = []
-    for tr_idx, va_idx in folds:
+    for fi, (tr_idx, va_idx) in enumerate(folds):
         X_tr = df_dev.iloc[tr_idx][feature_cols]
-        y_tr = y_dev[tr_idx]
+        y_tr = y_for_fit[tr_idx]
         X_va = df_dev.iloc[va_idx][feature_cols]
-        y_va = y_dev[va_idx]
+        y_va_fit = y_for_fit[va_idx]
+        y_va_log = y_dev[va_idx]
 
         model = model_builder()
         if passes_val:
-            model.fit(X_tr, y_tr, X_val=X_va, y_val=y_va)
+            model.fit(X_tr, y_tr, X_val=X_va, y_val=y_va_fit)
         else:
             model.fit(X_tr, y_tr)
-        m = metrics_table(y_va, model.predict(X_va))
+        pred = model.predict(X_va)
+        if expects_raw:
+            pred = np.log1p(np.clip(pred, 0, None))
+        m = metrics_table(y_va_log, pred)
         val = m[metric]
         scores.append(-val if metric in _MAXIMIZE else val)
+
+        trial.report(float(np.mean(scores)), fi)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
     return float(np.mean(scores))
 
 
-def _suggest_elastic_net(trial, seed):
+def _suggest_elastic_net(trial, seed, objective):
     return ElasticNetModel(
         alpha=trial.suggest_float("alpha", 1e-4, 1.0, log=True),
         l1_ratio=trial.suggest_float("l1_ratio", 0.0, 1.0),
         random_state=seed,
+        objective=objective,
     )
 
 
-def _suggest_rf(trial, seed):
+def _suggest_rf(trial, seed, objective):
     # max_iter fixed at ceiling; HistGBR's internal early stopping
     # (configured in RFModel.fit) picks the real round count per trial.
     return RFModel(
@@ -83,10 +104,11 @@ def _suggest_rf(trial, seed):
         learning_rate=trial.suggest_float("learning_rate", 1e-2, 0.3, log=True),
         l2_regularization=trial.suggest_float("l2_regularization", 1e-8, 10.0, log=True),
         random_state=seed,
+        objective=objective,
     )
 
 
-def _suggest_xgb(trial, seed):
+def _suggest_xgb(trial, seed, objective):
     return XGBModel(
         n_estimators=XGB_MAX_ROUNDS,
         max_depth=trial.suggest_int("max_depth", 3, 10),
@@ -98,10 +120,11 @@ def _suggest_xgb(trial, seed):
         reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
         reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
         random_state=seed,
+        objective=objective,
     )
 
 
-def _suggest_lgb(trial, seed):
+def _suggest_lgb(trial, seed, objective):
     return LGBModel(
         n_estimators=LGB_MAX_ROUNDS,
         num_leaves=trial.suggest_int("num_leaves", 15, 255),
@@ -113,6 +136,7 @@ def _suggest_lgb(trial, seed):
         reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
         reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
         random_state=seed,
+        objective=objective,
     )
 
 
@@ -132,11 +156,17 @@ def build_objective(
     feature_cols: list[str],
     seed: int = 42,
     metric: str = "rmse",
+    objective_name: str = "default",
+    y_fit: np.ndarray | None = None,
+    expects_raw: bool = False,
 ) -> Callable:
     """Return an Optuna objective closure for `model_type`.
 
     The objective reports mean `metric` across all CV folds on the validation
     portion of each fold. Tuning then minimizes this value (r2 is negated).
+
+    `objective_name` is forwarded to each wrapper so trials use the chosen
+    loss (default / poisson / tweedie / gamma / squaredlogerror).
     """
     if model_type not in _SUGGESTERS:
         raise ValueError(
@@ -145,10 +175,11 @@ def build_objective(
     suggester, passes_val = _SUGGESTERS[model_type]
 
     def objective(trial) -> float:
-        model_builder = lambda: suggester(trial, seed)
+        model_builder = lambda: suggester(trial, seed, objective_name)
         return _mean_cv_score(
-            model_builder, df_dev, y_dev, folds, feature_cols,
+            trial, model_builder, df_dev, y_dev, folds, feature_cols,
             passes_val=passes_val, metric=metric,
+            y_fit=y_fit, expects_raw=expects_raw,
         )
 
     return objective
@@ -166,21 +197,36 @@ def run_tuning(
     study_name: str | None = None,
     storage: str | None = None,
     metric: str = "rmse",
+    objective_name: str = "default",
+    y_fit: np.ndarray | None = None,
+    expects_raw: bool = False,
 ) -> dict:
     """Run a full Optuna study and return best params + study object."""
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     sampler = optuna.samplers.TPESampler(seed=seed)
+    # Fold-level MedianPruner: after each CV fold, if the running mean is
+    # worse than the median of completed trials at the same fold index, the
+    # trial is pruned. n_startup_trials=5 collects baseline stats before
+    # pruning kicks in; n_warmup_steps=1 gives every trial at least one fold.
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=5,
+        n_warmup_steps=1,
+        interval_steps=1,
+    )
     study = optuna.create_study(
         direction="minimize",
         sampler=sampler,
-        study_name=study_name or f"{model_type}_{metric}_seed{seed}",
+        pruner=pruner,
+        study_name=study_name or f"{model_type}_{objective_name}_{metric}_seed{seed}",
         storage=storage,
         load_if_exists=True,
     )
     obj = build_objective(
-        model_type, df_dev, y_dev, folds, feature_cols, seed=seed, metric=metric,
+        model_type, df_dev, y_dev, folds, feature_cols,
+        seed=seed, metric=metric,
+        objective_name=objective_name, y_fit=y_fit, expects_raw=expects_raw,
     )
     study.optimize(
         obj,

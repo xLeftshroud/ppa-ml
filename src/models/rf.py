@@ -1,10 +1,16 @@
-"""Histogram gradient boosting regressor with native categorical support.
+"""HistGradientBoosting regressor wrapped in a sklearn Pipeline.
 
-sklearn's RandomForestRegressor does not support monotone constraints or
-native categorical splits; this module uses HistGradientBoostingRegressor
-(sklearn >=1.4) which supports both. Class name `RFModel` is preserved so
-the outer pipeline does not need to change, but the algorithm underneath
-is GBDT, not bagging.
+Class name `RFModel` is preserved so the training/tuning code keeps
+working, but the underlying estimator is HistGradientBoostingRegressor
+(sklearn >= 1.5 for dict-form monotonic_cst). Cats go through OHE/TE,
+not native categorical splits.
+
+Loss is switchable via `objective`:
+- `default` → squared_error on log-y
+- `poisson` → poisson on raw-y (log-link)
+- `gamma`   → gamma on raw-y (log-link, y>0)
+
+HGB does not support tweedie or squaredlogerror.
 """
 from __future__ import annotations
 
@@ -13,11 +19,19 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.pipeline import Pipeline
 
-from .preprocess import cast_categoricals
+from .preprocess import build_encoder
 from ..config import CATEGORICAL_COLS
 
 MONOTONIC_PRICE_FEAT = "price_per_litre"
+
+_LOSS_MAP = {
+    "default": "squared_error",
+    "poisson": "poisson",
+    "gamma":   "gamma",
+}
+_RAW_Y_OBJECTIVES = {"poisson", "gamma"}
 
 
 @dataclass
@@ -28,53 +42,68 @@ class RFModel:
     learning_rate: float = 0.1
     l2_regularization: float = 0.0
     random_state: int = 42
+    objective: str = "default"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
+        if self.objective not in _LOSS_MAP:
+            raise ValueError(
+                f"objective must be one of {tuple(_LOSS_MAP)}, got {self.objective!r}"
+            )
+        self.pipeline_: Pipeline | None = None
         self.est_: HistGradientBoostingRegressor | None = None
         self._feature_order_: list[str] | None = None
-        self._cat_cols_: list[str] | None = None
 
-    def _prepare(self, X: pd.DataFrame) -> pd.DataFrame:
-        cols = self.feature_cols or list(X.columns)
+    @property
+    def expects_raw_y(self) -> bool:
+        return self.objective in _RAW_Y_OBJECTIVES
+
+    def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
-        self._cat_cols_ = cats
-        return cast_categoricals(X[cols], cats)
+        nums = [c for c in cols if c not in cats]
+        return nums, cats
 
-    def _build_monotone(self, feature_order: list[str]) -> list[int]:
-        return [-1 if f == MONOTONIC_PRICE_FEAT else 0 for f in feature_order]
-
-    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "RFModel":
-        Xp = self._prepare(X)
-        self._feature_order_ = list(Xp.columns)
-        mono = self._build_monotone(self._feature_order_)
-        # Internal early stopping: HistGBR holds out `validation_fraction`
-        # of the training rows, monitors validation loss, and halts after
-        # `n_iter_no_change` non-improving rounds. `max_iter` is the ceiling.
-        self.est_ = HistGradientBoostingRegressor(
+    def _build(self, X: pd.DataFrame) -> Pipeline:
+        cols = self.feature_cols or list(X.columns)
+        nums, cats = self._split_cols(cols)
+        prep = build_encoder(
+            X[cols], cat_cols=cats, num_cols=nums,
+            high_card_threshold=20, scale_numeric=False,
+        )
+        model = HistGradientBoostingRegressor(
+            loss=_LOSS_MAP[self.objective],
             max_iter=self.max_iter,
             max_depth=self.max_depth,
             min_samples_leaf=self.min_samples_leaf,
             learning_rate=self.learning_rate,
             l2_regularization=self.l2_regularization,
-            monotonic_cst=mono,
-            categorical_features="from_dtype",
+            monotonic_cst={MONOTONIC_PRICE_FEAT: -1},
             early_stopping=True,
             n_iter_no_change=50,
             validation_fraction=0.1,
             random_state=self.random_state,
         )
-        self.est_.fit(Xp, y)
+        return Pipeline([("prep", prep), ("model", model)])
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "RFModel":
+        cols = self.feature_cols or list(X.columns)
+        X = X[cols]
+        self.pipeline_ = self._build(X)
+        self.pipeline_.fit(X, y)
+        self.est_ = self.pipeline_.named_steps["model"]
+        self._feature_order_ = list(
+            self.pipeline_.named_steps["prep"].get_feature_names_out()
+        )
         return self
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        Xp = self._prepare(X).reindex(columns=self._feature_order_)
-        return self.est_.predict(Xp)
+        cols = self.feature_cols or list(X.columns)
+        return self.pipeline_.predict(X[cols])
 
     @property
     def feature_importance_(self) -> pd.Series:
-        """HistGBR does not expose built-in feature importances; returns zeros
-        so downstream fallback paths don't crash. Use permutation importance
-        for actual ranking."""
+        """HistGBR does not expose built-in importances; zeros keep
+        downstream fallbacks from crashing. Use permutation importance
+        for a real ranking."""
         n = len(self._feature_order_ or [])
         return pd.Series(np.zeros(n), index=self._feature_order_ or [])
