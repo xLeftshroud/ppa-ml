@@ -43,16 +43,22 @@ def tree_local_elasticity(
     df_panel: pd.DataFrame,
     feature_cols: list[str],
     price_col: str | None = None,
-    delta: float = 0.01,
+    delta: float = 0.10,
     predict_is_raw: bool = False,
 ) -> pd.DataFrame:
     """Numerical local elasticity: (d log_vol / d log_price) at each row,
     aggregated to (sku, customer) by median. Auto-detects whether the
     price feature is on log scale or raw scale and perturbs accordingly.
 
+    Uses a **symmetric central difference** with delta=0.10 (±10% price
+    perturbation). Trees are piecewise-constant, so a tiny one-sided step
+    often lands inside a flat leaf and gives β=0 even when the monotone
+    constraint is active. ±10% is large enough to cross most split
+    boundaries while still being "local" for elasticity interpretation.
+
     `predict_is_raw`: set True when the model returns raw volume (GLM / XGB
-    squaredlogerror); the function log-transforms predictions before the
-    finite-difference. Default False preserves the log-y contract."""
+    squaredlogerror / exported joblib wrapped in TTR); the function
+    log-transforms predictions before the finite-difference."""
     if price_col is None or price_col not in feature_cols:
         if "log_price_per_litre" in feature_cols:
             price_col = "log_price_per_litre"
@@ -65,21 +71,23 @@ def tree_local_elasticity(
     log_price = price_col.startswith("log_")
 
     X = df_panel[feature_cols].copy()
-    y_hat = model.predict(X)
-
     X_up = X.copy()
+    X_dn = X.copy()
     if log_price:
         X_up[price_col] = X_up[price_col] + delta
-        log_price_delta = delta
+        X_dn[price_col] = X_dn[price_col] - delta
+        denom = 2.0 * delta
     else:
         X_up[price_col] = X_up[price_col] * (1.0 + delta)
-        log_price_delta = float(np.log1p(delta))
+        X_dn[price_col] = X_dn[price_col] * (1.0 - delta)
+        denom = float(np.log(1.0 + delta) - np.log(1.0 - delta))
     y_up = model.predict(X_up)
+    y_dn = model.predict(X_dn)
 
     if predict_is_raw:
-        y_hat = np.log1p(np.clip(y_hat, 0, None))
         y_up = np.log1p(np.clip(y_up, 0, None))
-    local_elast = (y_up - y_hat) / log_price_delta
+        y_dn = np.log1p(np.clip(y_dn, 0, None))
+    local_elast = (y_up - y_dn) / denom
     tmp = pd.DataFrame(
         {
             "product_sku_code": df_panel["product_sku_code"].values,
@@ -133,9 +141,25 @@ def bayesian_elasticity(
 # Plausibility tests
 # ------------------------------------------------------------------
 def sign_test(elast_df: pd.DataFrame, col: str = "beta_mean") -> dict:
+    """Share of SKUs with beta<0. Also breaks out the zero bucket, because
+    tree elasticities often land exactly at 0 in feature regions where the
+    model never split on price; those are "no signal" rather than "wrong
+    direction" and shouldn't be conflated with positive betas."""
     valid = elast_df[col].dropna()
-    share_neg = float((valid < 0).mean()) if len(valid) else np.nan
-    return {"share_negative": share_neg, "n": int(len(valid)), "passes_95pct": share_neg > 0.95}
+    n = len(valid)
+    share_neg = float((valid < 0).mean()) if n else np.nan
+    share_zero = float((valid == 0).mean()) if n else np.nan
+    nonzero = valid[valid != 0]
+    share_neg_nonzero = float((nonzero < 0).mean()) if len(nonzero) else np.nan
+    return {
+        "share_negative": share_neg,
+        "share_zero": share_zero,
+        "share_negative_among_nonzero": share_neg_nonzero,
+        "n": int(n),
+        "n_nonzero": int(len(nonzero)),
+        "passes_95pct": share_neg > 0.95,
+        "passes_95pct_nonzero": share_neg_nonzero > 0.95 if not np.isnan(share_neg_nonzero) else False,
+    }
 
 
 def magnitude_test(
@@ -170,13 +194,22 @@ def stability_cv(
 
 
 def plausibility_scorecard(elast_df: pd.DataFrame) -> pd.Series:
-    """One-row summary for the scorecard table."""
+    """One-row summary for the scorecard table.
+
+    Reports both the strict `share_negative` and the nonzero-aware
+    `share_negative_among_nonzero`. For monotone-constrained trees the
+    latter is the honest sign check because β=0 means "tree didn't split
+    on price in that SKU's region" (no signal) rather than "tree learned
+    wrong direction"."""
     st = sign_test(elast_df)
     mt = magnitude_test(elast_df)
     return pd.Series(
         {
             "share_negative_beta": st["share_negative"],
+            "share_zero_beta": st["share_zero"],
+            "share_negative_among_nonzero": st["share_negative_among_nonzero"],
             "sign_test_pass": st["passes_95pct"],
+            "sign_test_pass_nonzero": st["passes_95pct_nonzero"],
             "median_beta": mt["median"],
             "share_in_soft_drink_range": mt["share_in_range"],
         }
