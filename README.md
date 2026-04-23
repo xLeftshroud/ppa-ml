@@ -16,8 +16,10 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
    CV leaderboard + Friedman / Nemenyi significance + sealed-test rank +
    elasticity plausibility.
 4. Optionally runs a **Bayesian hierarchical track** (`scripts/run_bayesian.py`)
-   that emits per-cell `(top_brand, flavor_internal, pack_tier)` elasticity
-   with 95% HDI and MCMC diagnostics.
+   with non-centered brand-nested + flavor/pack crossed random effects,
+   hard sign constraint `β < 0` via `-exp(·)`, and `ZeroSumNormal` priors on
+   crossed effects. Emits per-cell `(top_brand × flavor_internal × pack_tier)`
+   elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
 
 The eventual deliverable is an `outputs/model_<run>.joblib` whose `.predict()`
 returns raw `nielsen_total_volume` and a matching `elasticity_<run>.csv` with
@@ -61,6 +63,44 @@ python -m scripts.compare_runs --metric wmape
 # -> outputs/champion_card.json + leaderboards + CD plot
 ```
 
+### Stage 4 — Bayesian hierarchical track (optional)
+
+Per-cell `(top_brand × flavor_internal × pack_tier)` own-price elasticity with
+full posterior credible intervals. Complements the ML track on elasticity
+discipline (100% negative sign, 0% degenerate zeros, 95% HDI).
+
+```bash
+# Quick single-fit on full dev + sealed-test evaluation (~26 min on CPU):
+python -m scripts.run_bayesian --prior moderate \
+    --draws 2000 --warmup 1000 --chains 2
+
+# Full CV (|SEEDS| × N_SPLITS = 3 × 3) + final refit, matches GBM leaderboard schema (~3.5-4 h):
+python -m scripts.run_bayesian --prior moderate \
+    --draws 2000 --warmup 1000 --chains 2 --cv
+
+# Prior sensitivity sweep (optional, each run is independent):
+python -m scripts.run_bayesian --prior weak   --draws 2000 --warmup 1000 --cv
+python -m scripts.run_bayesian --prior strong --draws 2000 --warmup 1000 --cv
+
+# Re-rank including Bayesian (RMSE scale matches GBM tuning metric):
+python -m scripts.compare_runs --metric rmse
+```
+
+Model structure:
+
+- **Cells** = `(top_brand × flavor_internal × pack_tier)` — the PPA decision unit
+- **Slope hierarchy**: `β_cell = -exp(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
+  enforcing `β_cell < 0` by construction; `α_flavor` and `α_pack` use
+  `ZeroSumNormal` to remove additive redundancy with `μ_brand`
+- **Intercept hierarchy**: `α_cell` pooled to `μ_alpha_brand`, non-centered
+- **Priors**: `mu_global ~ Normal(0.5, 1)` (moderate) → prior mean elasticity ≈ `-1.65`
+- **Controls**: promotion, sin/cos seasonality, units-per-package, customer dummies
+- **Inference**: NUTS with 2 parallel chains (`numpyro.set_host_device_count(2)`
+  at script top), `target_accept_prob=0.9`
+
+Diagnostics printed after each fit: `rhat_max`, `ess_bulk_min`, `divergences`.
+Targets: `rhat < 1.01`, `divergences = 0`, `ess_bulk > 400`.
+
 ### Shortcut — already have trained joblibs
 
 If `outputs/` already holds the joblibs from a previous run, skip stages 1–2:
@@ -81,7 +121,8 @@ Tested on Python 3.12. Key dependencies:
 
 - `xgboost>=3.0`, `lightgbm>=4.6`, `scikit-learn>=1.7`
 - `optuna>=4.2`, `scikit-posthocs>=0.12`
-- `numpyro>=0.17`, `jax>=0.5`, `arviz>=0.21` (Bayesian track only)
+- `numpyro>=0.18`, `jax>=0.7,<0.10`, `jaxlib>=0.7,<0.10`, `arviz>=0.21` (Bayesian track core)
+- `h5netcdf>=1.3`, `h5py>=3.10` (required to persist Bayesian `.nc` posterior)
 - `shap>=0.47` (feature selection)
 
 ## Data
@@ -177,6 +218,21 @@ Each run writes five files to `outputs/`:
 
 Naming convention: `<run> = <model_type>` when `--objective default`,
 otherwise `<model_type>_<objective>` (e.g. `lgb_poisson`, `xgb_tweedie`).
+
+Bayesian runs (`scripts/run_bayesian.py`) write a different set under
+`outputs/` keyed by `<prior> ∈ {weak, moderate, strong}`:
+
+| file                                          | contents                                                    |
+|-----------------------------------------------|-------------------------------------------------------------|
+| `metrics_hier_bayes_<prior>.csv`              | CV metrics, `|SEEDS| × N_SPLITS` rows (only with `--cv`)    |
+| `test_metrics_hier_bayes_<prior>.json`        | single-row sealed-test metrics                              |
+| `elasticity_hier_bayes_<prior>.csv`           | per-SKU β broadcast from per-cell posterior                 |
+| `elasticity_cells_hier_bayes_<prior>.csv`     | per-cell β: `beta_mean`, `beta_median`, `beta_hdi_{lo,hi}`  |
+| `convergence_hier_bayes_<prior>.csv`          | `arviz.summary` of all hyperparameters (R-hat / ESS)        |
+| `metadata_hier_bayes_<prior>.json`            | prior config, code maps, sampler versions                   |
+| `model_hier_bayes_<prior>.nc`                 | full `arviz.InferenceData` (posterior + sample_stats)       |
+
+These feed into the same `compare_runs.py` leaderboards as GBM runs.
 
 ## Champion selection (4 layers)
 
