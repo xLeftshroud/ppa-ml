@@ -82,7 +82,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """Apply all feature transforms. Returns a new frame (does not mutate input).
 
     Existing columns of the same name are overwritten, so this is idempotent
-    on the shipped train_dataset_cleaned.csv and also correct when fed the
+    on the shipped dataset/dataset_cleaned.csv and also correct when fed the
     origin cleaned dataset (before notebook preprocessing).
     """
     out = df.copy()

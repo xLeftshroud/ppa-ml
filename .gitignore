@@ -38,7 +38,7 @@ dist/
 Thumbs.db
 
 # Project data
-train_dataset_cleaned.csv
+dataset/
 
 # Generated modelling outputs
 outputs/
@@ -48,3 +48,5 @@ outputs/
 *.sqlite3
 *.db
 *.log
+
+dataset/*

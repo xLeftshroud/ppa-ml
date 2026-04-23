@@ -1,6 +1,6 @@
 # PPA Training Pipeline
 
-Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for soft drinks.
+Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for Coca-Cola Europe.
 
 ## What it does
 
@@ -26,19 +26,46 @@ finite-difference on the trained model.
 
 ## Quickstart
 
-If `outputs/` already contains trained joblibs:
+End-to-end flow from a fresh clone. `dataset/` and `outputs/` are gitignored,
+so nothing is shipped — every artifact is produced by one of the three stages.
+
+### Stage 1 — Data preparation
+
+```bash
+# 1. Drop the raw source CSV into the dataset/ folder
+cp /path/to/original-dataset.csv dataset/original-dataset.csv
+
+# 2. Run the cleaning notebook end-to-end
+jupyter nbconvert --to notebook --execute \
+    notebooks/01_data_preparation.ipynb --inplace
+# Or: open in Jupyter/VSCode and "Run All"
+
+# 3. Verify the expected output exists at the configured path
+python -c "from src.config import DATA_PATH; assert DATA_PATH.exists(); print(DATA_PATH)"
+# -> .../dataset/dataset_cleaned.csv
+```
+
+### Stage 2 — Train the (model, objective) grid
+
+```bash
+# Run any subset of the 16 combos; each takes ~1h with --timeout 3600.
+python -m scripts.run_model --model xgb --objective poisson
+python -m scripts.run_model --model lgb --objective tweedie
+# ... see "Training a single run" below for the full matrix ...
+```
+
+### Stage 3 — Champion selection
 
 ```bash
 python -m scripts.compare_runs --metric wmape
 # -> outputs/champion_card.json + leaderboards + CD plot
 ```
 
-From scratch (per `(model, objective)` combination):
+### Shortcut — already have trained joblibs
+
+If `outputs/` already holds the joblibs from a previous run, skip stages 1–2:
 
 ```bash
-python -m scripts.run_model --model xgb --objective poisson
-python -m scripts.run_model --model lgb --objective tweedie
-# ... repeat for the 16 combinations you want ...
 python -m scripts.compare_runs --metric wmape
 ```
 
@@ -60,7 +87,10 @@ Tested on Python 3.12. Key dependencies:
 ## Data
 
 - Input CSV path is configured at [src/config.py:5](src/config.py#L5); default is
-  `train_dataset_cleaned.csv` at the repository root.
+  `dataset/dataset_cleaned.csv`. The cleaning notebook
+  [notebooks/01_data_preparation.ipynb](notebooks/01_data_preparation.ipynb)
+  produces this file from `dataset/original-dataset.csv`. The whole `dataset/`
+  directory is gitignored.
 - Required raw columns: `yearweek`, `product_sku_code`, `customer`,
   `nielsen_total_volume`, `price_per_item`, `pack_size_internal`,
   `units_per_package_internal`, `top_brand`, `flavor_internal`,
@@ -77,7 +107,12 @@ Tested on Python 3.12. Key dependencies:
 ```
 PPAtraining/
 ├── requirements.txt
-├── train_dataset_cleaned.csv          # input panel (not committed)
+├── dataset/                           # input data (gitignored)
+│   ├── original-dataset.csv           # raw source
+│   └── dataset_cleaned.csv            # output of notebooks/01_data_preparation.ipynb
+├── notebooks/
+│   ├── 01_data_preparation.ipynb      # raw -> cleaned
+│   └── 02_eda.ipynb                   # exploratory analysis
 ├── scripts/
 │   ├── run_model.py                   # training entry for the 4 ML families
 │   ├── run_bayesian.py                # hierarchical Bayes track
@@ -233,22 +268,3 @@ volume_pred = model.predict(df_engineered)   # raw nielsen_total_volume
 
 The exact columns the model expects are listed under `feature_cols` in
 `outputs/metadata_<run>.json`.
-
-## Extending
-
-- **Add an objective to an existing model.** Append the loss name to
-  `_OBJ_MAP` in `src/models/<model>.py`; add it to `_RAW_Y_OBJECTIVES` there
-  if the estimator trains on raw volume; register it in
-  `_MODEL_OBJ_SUPPORTED` at [scripts/run_model.py:68](scripts/run_model.py#L68)
-  so the CLI accepts it.
-- **Add a tuning metric.** Extend `metrics_table` in
-  [src/evaluate.py](src/evaluate.py), add the name to `SUPPORTED_METRICS` in
-  [src/tuning.py](src/tuning.py), and list it in `_MAXIMIZE` if it should be
-  maximised (Optuna minimises; the framework negates internally).
-- **Add a new model family.** Mirror the `ElasticNetModel` pattern
-  ([src/models/elastic_net.py](src/models/elastic_net.py)): expose a sklearn
-  `Pipeline` as `self.pipeline_`, implement `fit(X, y, X_val=None,
-  y_val=None)` and `predict(X)`, and expose the boolean property
-  `expects_raw_y`. Then register the class in `MODEL_CLASSES` and the
-  validation-set flag in `PASSES_VAL` in `scripts/run_model.py`, plus a
-  hyperparameter suggester in [src/tuning.py](src/tuning.py).
