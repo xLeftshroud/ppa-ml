@@ -3,10 +3,10 @@
 Pipeline: OHE (low-card cats) + TargetEncoder (high-card cats) + StandardScaler
 (numerics) + a sklearn linear estimator selected by `objective`:
 
-- `default`  → ElasticNet           (squared error + L1+L2 on log-y)
-- `poisson`  → PoissonRegressor     (log-link GLM, L2 only, raw-y)
-- `gamma`    → GammaRegressor       (log-link GLM, L2 only, raw-y)
-- `tweedie`  → TweedieRegressor     (log-link, power=1.5, L2 only, raw-y)
+- `squared_error` → ElasticNet           (squared error + L1+L2 on log-y)
+- `poisson`       → PoissonRegressor     (log-link GLM, L2 only, raw-y)
+- `gamma`         → GammaRegressor       (log-link GLM, L2 only, raw-y)
+- `tweedie`       → TweedieRegressor     (log-link, power=1.5, L2 only, raw-y)
 
 GLM objectives trade L1 sparsity for an explicit distributional assumption
 matching positive-integer volume data. Callers pass raw volume when
@@ -30,17 +30,17 @@ from .preprocess import build_encoder
 from ..config import CATEGORICAL_COLS, EN_HIGH_CARD_THRESHOLD
 
 MONOTONIC_PRICE_FEAT = "log_price_per_litre"
-_OBJECTIVES = ("default", "poisson", "tweedie", "gamma")
+_OBJECTIVES = ("squared_error", "poisson", "tweedie", "gamma")
 _TWEEDIE_POWER = 1.5
 
 
 @dataclass
 class ElasticNetModel:
     alpha: float = 1e-3
-    l1_ratio: float = 0.5  # only used when objective="default"
+    l1_ratio: float = 0.5  # only used when objective="squared_error"
     max_iter: int = 10_000
     random_state: int = 42
-    objective: str = "default"
+    objective: str = "squared_error"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):
@@ -53,7 +53,7 @@ class ElasticNetModel:
 
     @property
     def expects_raw_y(self) -> bool:
-        return self.objective != "default"
+        return self.objective != "squared_error"
 
     def _split_cols(self, cols: list[str]) -> tuple[list[str], list[str]]:
         cats = [c for c in CATEGORICAL_COLS if c in cols]
@@ -61,7 +61,7 @@ class ElasticNetModel:
         return nums, cats
 
     def _build_estimator(self):
-        if self.objective == "default":
+        if self.objective == "squared_error":
             return SKElasticNet(
                 alpha=self.alpha,
                 l1_ratio=self.l1_ratio,
@@ -106,7 +106,7 @@ class ElasticNetModel:
     def own_price_elasticity(self) -> float | None:
         """Recover interpretable elasticity for `log_price_per_litre`.
 
-        For `default` (OLS on log-y): β is standardized, un-standardize via
+        For `squared_error` (OLS on log-y): β is standardized, un-standardize via
         the scaler std to get %volume/%price.
 
         For GLM (Poisson/Gamma/Tweedie with log-link on raw y): β is also

@@ -56,9 +56,9 @@ def tree_local_elasticity(
     constraint is active. ±10% is large enough to cross most split
     boundaries while still being "local" for elasticity interpretation.
 
-    `predict_is_raw`: set True when the model returns raw volume (GLM / XGB
-    squaredlogerror / exported joblib wrapped in TTR); the function
-    log-transforms predictions before the finite-difference."""
+    `predict_is_raw`: set True when the model returns raw volume (GLM /
+    exported joblib wrapped in TTR); the function log-transforms predictions
+    before the finite-difference."""
     if price_col is None or price_col not in feature_cols:
         if "log_price_per_litre" in feature_cols:
             price_col = "log_price_per_litre"

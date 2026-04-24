@@ -6,13 +6,13 @@ custom imports.
 
 Two code paths depending on the wrapper's training y-space:
 
-- log-y objective (default / ElasticNet MSE):
+- log-y objective (squared_error):
   clone the inner Pipeline, wrap in `TransformedTargetRegressor(log1p, expm1)`,
   fit on raw volume so `.predict()` returns raw.
 
-- raw-y objective (Poisson / Tweedie / Gamma / XGB squaredlogerror):
-  the estimator already handles raw y via log-link / internal log1p; clone
-  the inner Pipeline, fit directly on raw volume, skip TTR.
+- raw-y objective (Poisson / Tweedie / Gamma):
+  the estimator already handles raw y via log-link; clone the inner
+  Pipeline, fit directly on raw volume, skip TTR.
 
 In both cases the downstream contract is identical:
 `joblib.load(path).predict(engineered_df)` → raw nielsen_total_volume.

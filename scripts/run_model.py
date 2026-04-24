@@ -66,12 +66,12 @@ PASSES_VAL = {"elastic_net": False, "hgb": False, "xgb": True, "lgb": True}
 # Which --objective values each model supports. Argparse accepts the union;
 # we enforce per-model compatibility after parse.
 _MODEL_OBJ_SUPPORTED = {
-    "elastic_net": {"default", "poisson", "tweedie", "gamma"},
-    "xgb":         {"default", "squaredlogerror", "poisson", "tweedie", "gamma"},
-    "lgb":         {"default", "poisson", "tweedie", "gamma"},
-    "hgb":         {"default", "poisson", "gamma"},
+    "elastic_net": {"squared_error", "poisson", "tweedie", "gamma"},
+    "xgb":         {"squared_error", "poisson", "tweedie", "gamma"},
+    "lgb":         {"squared_error", "poisson", "tweedie", "gamma"},
+    "hgb":         {"squared_error", "poisson", "gamma"},
 }
-_RAW_Y_OBJECTIVES = {"squaredlogerror", "poisson", "tweedie", "gamma"}
+_RAW_Y_OBJECTIVES = {"poisson", "tweedie", "gamma"}
 
 
 def load_and_engineer() -> pd.DataFrame:
@@ -123,8 +123,8 @@ def main():
     )
     ap.add_argument(
         "--objective",
-        default="default",
-        choices=["default", "squaredlogerror", "poisson", "tweedie", "gamma"],
+        default="squared_error",
+        choices=["squared_error", "poisson", "tweedie", "gamma"],
         help="Training loss. Per-model compatibility enforced after parse.",
     )
     args = ap.parse_args()
@@ -148,7 +148,7 @@ def main():
     df_test = df_fe.iloc[test_idx].reset_index(drop=True)
     df_dev = df_dev.dropna(subset=["nielsen_total_volume"]).reset_index(drop=True)
     y_dev = df_dev["log_nielsen_total_volume"].values            # always log-space (for metrics)
-    y_raw = df_dev["nielsen_total_volume"].values.astype(float)  # raw volume (for GLM/squaredlogerror fit)
+    y_raw = df_dev["nielsen_total_volume"].values.astype(float)  # raw volume (for GLM fit)
     y_fit = y_raw if expects_raw else y_dev
     if args.objective == "gamma":
         # GammaRegressor requires y > 0; nudge zeros up to avoid fit error.
@@ -194,7 +194,7 @@ def main():
         model_name=model_type,
         y_fit=y_fit, expects_raw=expects_raw,
     )
-    obj_tag = "" if args.objective == "default" else f"_{args.objective}"
+    obj_tag = "" if args.objective == "squared_error" else f"_{args.objective}"
     suffix = f"{obj_tag}{args.output_suffix}"
     metrics_path = OUTPUTS / f"metrics_{model_type}{suffix}.csv"
     metrics_df.to_csv(metrics_path, index=False)
@@ -284,7 +284,7 @@ def main():
 
     # Save a self-contained sklearn object that returns raw nielsen_total_volume.
     # log-y model -> wrapped in TransformedTargetRegressor(log1p, expm1).
-    # raw-y model (GLM/squaredlogerror) -> bare Pipeline (predict already raw).
+    # raw-y model (GLM) -> bare Pipeline (predict already raw).
     export_champion(champion, df_dev[feature_cols], y_raw, model_path)
 
     versions = {

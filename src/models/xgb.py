@@ -6,11 +6,10 @@ name "price_per_litre" via XGB's dict form, which survives preprocessing
 because `verbose_feature_names_out=False` preserves numeric column names.
 
 Objective is switchable via `objective`:
-- `default`         → reg:squarederror on log-y
-- `squaredlogerror` → reg:squaredlogerror on raw-y (XGB log1p's internally)
-- `poisson`         → count:poisson on raw-y (log-link)
-- `tweedie`         → reg:tweedie on raw-y (log-link, power=1.5)
-- `gamma`           → reg:gamma on raw-y (log-link, y>0)
+- `squared_error` → reg:squarederror on log-y
+- `poisson`       → count:poisson on raw-y (log-link)
+- `tweedie`       → reg:tweedie on raw-y (log-link, power=1.5)
+- `gamma`         → reg:gamma on raw-y (log-link, y>0)
 """
 from __future__ import annotations
 
@@ -28,13 +27,12 @@ MONOTONIC_PRICE_FEAT = "price_per_litre"
 _TWEEDIE_POWER = 1.5
 
 _OBJ_MAP = {
-    "default":         "reg:squarederror",
-    "squaredlogerror": "reg:squaredlogerror",
-    "poisson":         "count:poisson",
-    "tweedie":         "reg:tweedie",
-    "gamma":           "reg:gamma",
+    "squared_error": "reg:squarederror",
+    "poisson":       "count:poisson",
+    "tweedie":       "reg:tweedie",
+    "gamma":         "reg:gamma",
 }
-_RAW_Y_OBJECTIVES = {"squaredlogerror", "poisson", "tweedie", "gamma"}
+_RAW_Y_OBJECTIVES = {"poisson", "tweedie", "gamma"}
 
 
 @dataclass
@@ -51,7 +49,7 @@ class XGBModel:
     random_state: int = 42
     n_jobs: int = -1
     early_stopping_rounds: int = 50
-    objective: str = "default"
+    objective: str = "squared_error"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):

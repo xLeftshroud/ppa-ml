@@ -4,10 +4,10 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
 
 ## What it does
 
-1. Trains a grid of up to **16 `(model × objective)` combinations** across four
+1. Trains a grid of up to **15 `(model × objective)` combinations** across four
    ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM —
-   each with industry-standard regression losses (`default` / `squaredlogerror`
-   / `poisson` / `tweedie` / `gamma`). Tree models enforce a monotone constraint
+   each with industry-standard regression losses (`squared_error` / `poisson`
+   / `tweedie` / `gamma`). Tree models enforce a monotone constraint
    `∂E[volume] / ∂price ≤ 0` on `price_per_litre`.
 2. Tunes each combination with **Optuna TPE + fold-level MedianPruner** under a
    one-hour wall-clock budget, validates on expanding-window CV over
@@ -50,7 +50,7 @@ python -c "from src.config import DATA_PATH; assert DATA_PATH.exists(); print(DA
 ### Stage 2 — Train the (model, objective) grid
 
 ```bash
-# Run any subset of the 16 combos; each takes ~1h with --timeout 3600.
+# Run any subset of the 15 combos; each takes ~1h with --timeout 3600.
 python -m scripts.run_model --model xgb --objective poisson
 python -m scripts.run_model --model lgb --objective tweedie
 # ... see "Training a single run" below for the full matrix ...
@@ -187,21 +187,21 @@ Produced artifacts live under `outputs/`.
 ```
 python -m scripts.run_model \
     --model {elastic_net|hgb|xgb|lgb} \
-    --objective {default|squaredlogerror|poisson|tweedie|gamma} \
+    --objective {squared_error|poisson|tweedie|gamma} \
     [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
 ```
 
 Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/run_model.py#L68):
 
-| model         | default | squaredlogerror | poisson | tweedie | gamma |
-|---------------|:-------:|:---------------:|:-------:|:-------:|:-----:|
-| elastic_net   | yes     |                 | yes     | yes     | yes   |
-| hgb           | yes     |                 | yes     |         | yes   |
-| xgb           | yes     | yes             | yes     | yes     | yes   |
-| lgb           | yes     |                 | yes     | yes     | yes   |
+| model         | squared_error | poisson | tweedie | gamma |
+|---------------|:-------------:|:-------:|:-------:|:-----:|
+| elastic_net   | yes           | yes     | yes     | yes   |
+| hgb           | yes           | yes     |         | yes   |
+| xgb           | yes           | yes     | yes     | yes   |
+| lgb           | yes           | yes     | yes     | yes   |
 
-> **Caveat on the `elastic_net` row.** Only `--objective default` is true
-> ElasticNet (L1+L2 OLS on log-y). The `poisson` / `tweedie` / `gamma`
+> **Caveat on the `elastic_net` row.** Only `--objective squared_error` is
+> true ElasticNet (L1+L2 OLS on log-y). The `poisson` / `tweedie` / `gamma`
 > variants swap the underlying estimator to sklearn's `PoissonRegressor` /
 > `TweedieRegressor(power=1.5)` / `GammaRegressor` — log-link GLMs with **L2
 > penalty only** (no L1). They share `ElasticNetModel` as a dispatch shell
@@ -209,7 +209,7 @@ Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/ru
 > are distinct model families. `hgb`, `xgb`, `lgb` keep the same estimator
 > across objectives — only the loss function changes.
 
-That is 16 valid combinations. Each run takes roughly one hour (`--timeout`
+That is 15 valid combinations. Each run takes roughly one hour (`--timeout`
 defaults to `TUNING_WALLCLOCK_SEC = 3600`). Optuna persists trials in
 `outputs/optuna.db` with `load_if_exists=True`, so re-invoking the same
 `(model, objective, metric, seed)` continues the existing study rather than
@@ -225,7 +225,7 @@ Each run writes five files to `outputs/`:
 | `metadata_<run>.json`         | objective, `feature_cols`, `best_params`, versions     |
 | `model_<run>.joblib`          | exported champion (see "Downstream consumption")       |
 
-Naming convention: `<run> = <model_type>` when `--objective default`,
+Naming convention: `<run> = <model_type>` when `--objective squared_error`,
 otherwise `<model_type>_<objective>` (e.g. `lgb_poisson`, `xgb_tweedie`).
 
 Bayesian runs (`scripts/run_bayesian.py`) write a different set under
@@ -292,7 +292,6 @@ python -m scripts.run_model --model hgb
 python -m scripts.run_model --model hgb --objective poisson
 python -m scripts.run_model --model hgb --objective gamma
 python -m scripts.run_model --model xgb
-python -m scripts.run_model --model xgb --objective squaredlogerror
 python -m scripts.run_model --model xgb --objective poisson
 python -m scripts.run_model --model xgb --objective tweedie
 python -m scripts.run_model --model xgb --objective gamma
@@ -312,11 +311,11 @@ Path B `reextract_elasticity` is redundant.
 Every `outputs/model_<run>.joblib` is a self-contained sklearn object. The
 export contract (see [src/models/export.py](src/models/export.py)) is:
 
-- **log-y objective** (`default` on ElasticNet / XGB / LGB / HGB) — the inner
-  `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
+- **log-y objective** (`squared_error` on ElasticNet / XGB / LGB / HGB) — the
+  inner `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
   inverse_func=expm1)` and refit on raw volume.
-- **raw-y objective** (`poisson` / `tweedie` / `gamma` / `squaredlogerror`) —
-  the inner `Pipeline` is refit directly on raw volume; no TTR wrapper.
+- **raw-y objective** (`poisson` / `tweedie` / `gamma`) — the inner
+  `Pipeline` is refit directly on raw volume; no TTR wrapper.
 
 In both cases `joblib.load(path).predict(df)` returns raw
 `nielsen_total_volume`. Consuming the champion from another process:

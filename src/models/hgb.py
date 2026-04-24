@@ -5,11 +5,11 @@ encoder dispatch works across all tree models. Requires sklearn >= 1.5
 for dict-form `monotonic_cst`.
 
 Loss is switchable via `objective`:
-- `default` -> squared_error on log-y
-- `poisson` -> poisson on raw-y (log-link)
-- `gamma`   -> gamma on raw-y (log-link, y>0)
+- `squared_error` -> squared_error on log-y
+- `poisson`       -> poisson on raw-y (log-link)
+- `gamma`         -> gamma on raw-y (log-link, y>0)
 
-HGB does not support tweedie or squaredlogerror.
+HGB does not support tweedie.
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ from ..config import CATEGORICAL_COLS
 MONOTONIC_PRICE_FEAT = "price_per_litre"
 
 _LOSS_MAP = {
-    "default": "squared_error",
-    "poisson": "poisson",
-    "gamma":   "gamma",
+    "squared_error": "squared_error",
+    "poisson":       "poisson",
+    "gamma":         "gamma",
 }
 _RAW_Y_OBJECTIVES = {"poisson", "gamma"}
 
@@ -41,7 +41,7 @@ class HGBModel:
     learning_rate: float = 0.1
     l2_regularization: float = 0.0
     random_state: int = 42
-    objective: str = "default"
+    objective: str = "squared_error"
     feature_cols: list[str] | None = None
 
     def __post_init__(self):

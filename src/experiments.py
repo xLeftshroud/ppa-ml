@@ -31,10 +31,10 @@ def run_across_seeds(
     """Train `build_model(seed)` on each (seed, fold); return metrics DataFrame.
 
     `y_dev` is always log-scale (used by metrics_table). If the model was
-    trained on raw volume (GLM objectives / XGB squaredlogerror), pass
-    `y_fit=raw_volume_array` and `expects_raw=True`; the model's raw
-    predictions are log1p'd before metrics so metrics_table sees log-space
-    inputs and its raw-volume output columns stay comparable.
+    trained on raw volume (GLM objectives), pass `y_fit=raw_volume_array` and
+    `expects_raw=True`; the model's raw predictions are log1p'd before
+    metrics so metrics_table sees log-space inputs and its raw-volume output
+    columns stay comparable.
     """
     seeds = seeds or SEEDS
     folds = expanding_window_cv(df_dev)

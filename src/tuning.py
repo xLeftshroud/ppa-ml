@@ -42,9 +42,9 @@ def _mean_cv_score(
     """Train model on each fold's train, predict on val, return mean `metric`.
 
     `y_dev` is always log-scale (for metrics). When the model trains on raw
-    volume (GLM objectives / XGB squaredlogerror), pass `y_fit=raw_y` and
-    `expects_raw=True`. Raw predictions are log1p'd so metrics_table's
-    internal expm1 recovers raw values for the output columns.
+    volume (GLM objectives), pass `y_fit=raw_y` and `expects_raw=True`. Raw
+    predictions are log1p'd so metrics_table's internal expm1 recovers raw
+    values for the output columns.
 
     r2 / r2_log are maximized → negated so Optuna can minimize.
 
@@ -156,7 +156,7 @@ def build_objective(
     feature_cols: list[str],
     seed: int = 42,
     metric: str = "rmse",
-    objective_name: str = "default",
+    objective_name: str = "squared_error",
     y_fit: np.ndarray | None = None,
     expects_raw: bool = False,
 ) -> Callable:
@@ -166,7 +166,7 @@ def build_objective(
     portion of each fold. Tuning then minimizes this value (r2 is negated).
 
     `objective_name` is forwarded to each wrapper so trials use the chosen
-    loss (default / poisson / tweedie / gamma / squaredlogerror).
+    loss (squared_error / poisson / tweedie / gamma).
     """
     if model_type not in _SUGGESTERS:
         raise ValueError(
@@ -197,7 +197,7 @@ def run_tuning(
     study_name: str | None = None,
     storage: str | None = None,
     metric: str = "rmse",
-    objective_name: str = "default",
+    objective_name: str = "squared_error",
     y_fit: np.ndarray | None = None,
     expects_raw: bool = False,
 ) -> dict:
