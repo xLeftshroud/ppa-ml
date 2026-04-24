@@ -12,12 +12,12 @@ import pandas as pd
 
 from .evaluate import metrics_table
 from .models.elastic_net import ElasticNetModel
-from .models.rf import RFModel
+from .models.hgb import HGBModel
 from .models.xgb import XGBModel
 from .models.lgb import LGBModel
 
 
-MODEL_TYPES = ("elastic_net", "rf", "xgb", "lgb")
+MODEL_TYPES = ("elastic_net", "hgb", "xgb", "lgb")
 
 # Per-model boosting-round ceiling during tuning. Early stopping inside each
 # model's fit() picks the real best_iteration per fold -- these are just the
@@ -25,7 +25,7 @@ MODEL_TYPES = ("elastic_net", "rf", "xgb", "lgb")
 # the lowest-lr trials can reach convergence before hitting the ceiling.
 XGB_MAX_ROUNDS = 3000   # lr search [1e-3, 0.3]
 LGB_MAX_ROUNDS = 3000   # lr search [1e-3, 0.3]
-RF_MAX_ROUNDS = 1500    # lr search [1e-2, 0.3], HistGBR with internal early stopping
+HGB_MAX_ROUNDS = 1500    # lr search [1e-2, 0.3], HistGBR with internal early stopping
 
 SUPPORTED_METRICS = (
     "rmse", "rmse_log", "rmsle", "r2", "r2_log",
@@ -94,11 +94,11 @@ def _suggest_elastic_net(trial, seed, objective):
     )
 
 
-def _suggest_rf(trial, seed, objective):
+def _suggest_hgb(trial, seed, objective):
     # max_iter fixed at ceiling; HistGBR's internal early stopping
-    # (configured in RFModel.fit) picks the real round count per trial.
-    return RFModel(
-        max_iter=RF_MAX_ROUNDS,
+    # (configured in HGBModel.fit) picks the real round count per trial.
+    return HGBModel(
+        max_iter=HGB_MAX_ROUNDS,
         max_depth=trial.suggest_int("max_depth", 3, 12),
         min_samples_leaf=trial.suggest_int("min_samples_leaf", 5, 50),
         learning_rate=trial.suggest_float("learning_rate", 1e-2, 0.3, log=True),
@@ -142,7 +142,7 @@ def _suggest_lgb(trial, seed, objective):
 
 _SUGGESTERS = {
     "elastic_net": (_suggest_elastic_net, False),
-    "rf":          (_suggest_rf,          False),
+    "hgb":         (_suggest_hgb,         False),
     "xgb":         (_suggest_xgb,         True),
     "lgb":         (_suggest_lgb,         True),
 }

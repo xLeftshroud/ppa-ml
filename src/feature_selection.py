@@ -102,7 +102,7 @@ def _make_fs_estimator(model_type: str, random_state: int):
             n_jobs=-1,
             verbose=-1,
         )
-    if model_type == "rf":
+    if model_type == "hgb":
         from sklearn.ensemble import HistGradientBoostingRegressor
         return HistGradientBoostingRegressor(
             max_iter=200,
@@ -303,7 +303,7 @@ def run_full_pipeline(
 ) -> dict:
     """Full 4-step industrial feature selection.
 
-    Tree models (xgb/lgb/rf): VIF -> BorutaShap -> (optional) Stability.
+    Tree models (xgb/lgb/hgb): VIF -> BorutaShap -> (optional) Stability.
     Elastic Net:              VIF -> L1 (ElasticNetCV) -> (optional) L1 Stability.
     Boruta is skipped for Elastic Net -- L1 sparsity IS the selector;
     external shadow/SHAP is not meaningful for linear models.

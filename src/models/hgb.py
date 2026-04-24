@@ -1,14 +1,13 @@
-"""HistGradientBoosting regressor wrapped in a sklearn Pipeline.
+"""HistGradientBoostingRegressor wrapped in a sklearn Pipeline.
 
-Class name `RFModel` is preserved so the training/tuning code keeps
-working, but the underlying estimator is HistGradientBoostingRegressor
-(sklearn >= 1.5 for dict-form monotonic_cst). Cats go through OHE/TE,
-not native categorical splits.
+Cats go through OHE/TE (not native categorical splits) so the same
+encoder dispatch works across all tree models. Requires sklearn >= 1.5
+for dict-form `monotonic_cst`.
 
 Loss is switchable via `objective`:
-- `default` → squared_error on log-y
-- `poisson` → poisson on raw-y (log-link)
-- `gamma`   → gamma on raw-y (log-link, y>0)
+- `default` -> squared_error on log-y
+- `poisson` -> poisson on raw-y (log-link)
+- `gamma`   -> gamma on raw-y (log-link, y>0)
 
 HGB does not support tweedie or squaredlogerror.
 """
@@ -35,7 +34,7 @@ _RAW_Y_OBJECTIVES = {"poisson", "gamma"}
 
 
 @dataclass
-class RFModel:
+class HGBModel:
     max_iter: int = 1500
     max_depth: int | None = None
     min_samples_leaf: int = 20
@@ -85,7 +84,7 @@ class RFModel:
         )
         return Pipeline([("prep", prep), ("model", model)])
 
-    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "RFModel":
+    def fit(self, X: pd.DataFrame, y: np.ndarray) -> "HGBModel":
         cols = self.feature_cols or list(X.columns)
         X = X[cols]
         self.pipeline_ = self._build(X)

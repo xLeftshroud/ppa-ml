@@ -5,7 +5,7 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
 ## What it does
 
 1. Trains a grid of up to **16 `(model × objective)` combinations** across four
-   ML families — ElasticNet, HistGradientBoosting (as `rf`), XGBoost, LightGBM —
+   ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM —
    each with industry-standard regression losses (`default` / `squaredlogerror`
    / `poisson` / `tweedie` / `gamma`). Tree models enforce a monotone constraint
    `∂E[volume] / ∂price ≤ 0` on `price_per_litre`.
@@ -172,7 +172,7 @@ PPAtraining/
     ├── baselines.py                   # naive + seasonal_naive
     └── models/
         ├── elastic_net.py             # log-log ElasticNet (coef = elasticity)
-        ├── rf.py                      # HistGradientBoostingRegressor
+        ├── hgb.py                     # HistGradientBoostingRegressor
         ├── xgb.py                     # XGBoost, monotone_constraints on price
         ├── lgb.py                     # LightGBM, monotone_constraints on price
         ├── hier_bayes.py              # numpyro hierarchical model
@@ -186,7 +186,7 @@ Produced artifacts live under `outputs/`.
 
 ```
 python -m scripts.run_model \
-    --model {elastic_net|rf|xgb|lgb} \
+    --model {elastic_net|hgb|xgb|lgb} \
     --objective {default|squaredlogerror|poisson|tweedie|gamma} \
     [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
 ```
@@ -196,9 +196,18 @@ Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/ru
 | model         | default | squaredlogerror | poisson | tweedie | gamma |
 |---------------|:-------:|:---------------:|:-------:|:-------:|:-----:|
 | elastic_net   | yes     |                 | yes     | yes     | yes   |
-| rf            | yes     |                 | yes     |         | yes   |
+| hgb           | yes     |                 | yes     |         | yes   |
 | xgb           | yes     | yes             | yes     | yes     | yes   |
 | lgb           | yes     |                 | yes     | yes     | yes   |
+
+> **Caveat on the `elastic_net` row.** Only `--objective default` is true
+> ElasticNet (L1+L2 OLS on log-y). The `poisson` / `tweedie` / `gamma`
+> variants swap the underlying estimator to sklearn's `PoissonRegressor` /
+> `TweedieRegressor(power=1.5)` / `GammaRegressor` — log-link GLMs with **L2
+> penalty only** (no L1). They share `ElasticNetModel` as a dispatch shell
+> ([src/models/elastic_net.py:63-78](src/models/elastic_net.py#L63-L78)) but
+> are distinct model families. `hgb`, `xgb`, `lgb` keep the same estimator
+> across objectives — only the loss function changes.
 
 That is 16 valid combinations. Each run takes roughly one hour (`--timeout`
 defaults to `TUNING_WALLCLOCK_SEC = 3600`). Optuna persists trials in
@@ -279,9 +288,9 @@ python -m scripts.run_model --model elastic_net
 python -m scripts.run_model --model elastic_net --objective poisson
 python -m scripts.run_model --model elastic_net --objective tweedie
 python -m scripts.run_model --model elastic_net --objective gamma
-python -m scripts.run_model --model rf
-python -m scripts.run_model --model rf --objective poisson
-python -m scripts.run_model --model rf --objective gamma
+python -m scripts.run_model --model hgb
+python -m scripts.run_model --model hgb --objective poisson
+python -m scripts.run_model --model hgb --objective gamma
 python -m scripts.run_model --model xgb
 python -m scripts.run_model --model xgb --objective squaredlogerror
 python -m scripts.run_model --model xgb --objective poisson
@@ -303,7 +312,7 @@ Path B `reextract_elasticity` is redundant.
 Every `outputs/model_<run>.joblib` is a self-contained sklearn object. The
 export contract (see [src/models/export.py](src/models/export.py)) is:
 
-- **log-y objective** (`default` on ElasticNet / XGB / LGB / RF) — the inner
+- **log-y objective** (`default` on ElasticNet / XGB / LGB / HGB) — the inner
   `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
   inverse_func=expm1)` and refit on raw volume.
 - **raw-y objective** (`poisson` / `tweedie` / `gamma` / `squaredlogerror`) —
