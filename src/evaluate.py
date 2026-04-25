@@ -1,5 +1,5 @@
-"""Evaluation metrics for PPA. Target is log1p(volume); most metrics are
-reported both in log-space and the original volume scale.
+"""Evaluation metrics for PPA. Target is log1p(volume_in_litres); most metrics
+are reported both in log-space and the raw-litre scale.
 """
 from __future__ import annotations
 

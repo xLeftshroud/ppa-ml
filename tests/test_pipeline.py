@@ -33,13 +33,13 @@ def test_feature_engineering():
     df = _small_df()
     df_fe = build_features(df)
 
-    for col in ["log_nielsen_total_volume", "log_price_per_litre", "pack_size_total",
+    for col in ["log_volume_in_litres", "log_price_per_litre", "pack_size_total",
                 "pack_tier"]:
         assert col in df_fe.columns, f"missing feature: {col}"
     from src.config import CANDIDATE_FEATURES
     assert "price_per_item" not in CANDIDATE_FEATURES
     assert "price_per_100ml" not in CANDIDATE_FEATURES
-    assert (df_fe["log_nielsen_total_volume"] >= 0).all()
+    assert (df_fe["log_volume_in_litres"] >= 0).all()
     print(f"[OK] feature_engineering: {df_fe.shape}")
 
 
@@ -64,12 +64,12 @@ def test_time_series_cv():
 
 def test_baselines():
     df = _small_df()
-    df_fe = build_features(df).dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
+    df_fe = build_features(df).dropna(subset=["log_volume_in_litres"]).reset_index(drop=True)
 
     folds = expanding_window_cv(df_fe)
     tr, va = folds[0]
     df_tr, df_va = df_fe.iloc[tr], df_fe.iloc[va]
-    y_true = df_va["log_nielsen_total_volume"].values
+    y_true = df_va["log_volume_in_litres"].values
 
     pred = naive_predict(df_tr, df_va)
     assert pred.shape == y_true.shape
@@ -84,12 +84,12 @@ def test_baselines():
 
 def test_elastic_net_fits():
     df = _small_df()
-    df_fe = build_features(df).dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
+    df_fe = build_features(df).dropna(subset=["log_volume_in_litres"]).reset_index(drop=True)
 
     feats = ["log_price_per_litre", "promotion_indicator",
              "pack_size_total", "week_sin", "week_cos"]
     X = df_fe[feats].fillna(0.0)
-    y = df_fe["log_nielsen_total_volume"].values
+    y = df_fe["log_volume_in_litres"].values
 
     m = ElasticNetModel(alpha=1e-2, l1_ratio=0.5, feature_cols=feats)
     m.fit(X, y)

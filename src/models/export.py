@@ -15,7 +15,7 @@ Two code paths depending on the wrapper's training y-space:
   Pipeline, fit directly on raw volume, skip TTR.
 
 In both cases the downstream contract is identical:
-`joblib.load(path).predict(engineered_df)` → raw nielsen_total_volume.
+`joblib.load(path).predict(engineered_df)` → raw volume_in_litres.
 """
 from __future__ import annotations
 

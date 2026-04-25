@@ -22,8 +22,10 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
    elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
 
 The eventual deliverable is an `outputs/model_<run>.joblib` whose `.predict()`
-returns raw `nielsen_total_volume` and a matching `elasticity_<run>.csv` with
-per-SKU `(beta_mean, beta_lo, beta_hi, beta_std)` from a symmetric central
+returns raw `volume_in_litres` (industry-standard PPA target — packs × units
+per pack × pack_size_ml / 1000 — for cross-pack-comparable elasticity) and a
+matching `elasticity_<run>.csv` with per-SKU
+`(beta_mean, beta_lo, beta_hi, beta_std)` from a symmetric central
 finite-difference on the trained model.
 
 ## Quickstart
@@ -94,7 +96,7 @@ Model structure:
   `ZeroSumNormal` to remove additive redundancy with `μ_brand`
 - **Intercept hierarchy**: `α_cell` pooled to `μ_alpha_brand`, non-centered
 - **Priors**: `mu_global ~ Normal(0.5, 1)` (moderate) → prior mean elasticity ≈ `-1.65`
-- **Controls**: promotion, sin/cos seasonality, units-per-package, customer dummies
+- **Controls**: promotion, sin/cos seasonality, customer dummies
 - **Inference**: NUTS with 2 parallel chains (`numpyro.set_host_device_count(2)`
   at script top), `target_accept_prob=0.9`
 
@@ -138,7 +140,8 @@ Tested on Python 3.12. Key dependencies:
   `pack_type_internal`, `pack_tier`.
 - Row-wise, cold-start-safe features are derived in [src/features.py](src/features.py):
   `price_per_litre`, `log_price_per_litre`, `week_sin`, `week_cos`,
-  `continuous_week`, `pack_size_total`, `log_nielsen_total_volume`.
+  `continuous_week`, `pack_size_total`, `volume_in_litres`,
+  `log_volume_in_litres` (training target).
 - Splitting (see [src/split.py](src/split.py)): the sealed test set is the last
   `TEST_WEEK_RATIO = 20%` of unique weeks. The dev set is partitioned into
   `N_SPLITS + 1 = 4` blocks, yielding 3 expanding-window CV folds.
@@ -317,8 +320,10 @@ export contract (see [src/models/export.py](src/models/export.py)) is:
 - **raw-y objective** (`poisson` / `tweedie` / `gamma`) — the inner
   `Pipeline` is refit directly on raw volume; no TTR wrapper.
 
-In both cases `joblib.load(path).predict(df)` returns raw
-`nielsen_total_volume`. Consuming the champion from another process:
+In both cases `joblib.load(path).predict(df)` returns raw `volume_in_litres`.
+To convert back to packs (when a downstream report needs pack counts), divide
+by `units_per_package_internal * pack_size_internal / 1000`. Consuming the
+champion from another process:
 
 ```python
 import joblib
@@ -327,7 +332,7 @@ from src.features import build_features
 
 model = joblib.load("outputs/model_lgb_poisson.joblib")
 df_engineered = build_features(pd.read_csv("new_data.csv"))
-volume_pred = model.predict(df_engineered)   # raw nielsen_total_volume
+litres_pred = model.predict(df_engineered)   # raw volume_in_litres
 ```
 
 The exact columns the model expects are listed under `feature_cols` in

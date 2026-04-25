@@ -50,3 +50,5 @@ outputs/
 *.log
 
 dataset/*
+
+outputs_old/
