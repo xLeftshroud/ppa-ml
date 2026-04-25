@@ -15,7 +15,11 @@ import pandas as pd
 
 
 SOFT_DRINK_LOWER = -3.5
-SOFT_DRINK_UPPER = -0.5
+# Upper bound widened from -0.5 to -0.3 after switching the target from log
+# packs to log volume_in_litres: pack-size effects are no longer absorbed into
+# beta, so it tends to land slightly less negative. Narrow once the new
+# distribution stabilises.
+SOFT_DRINK_UPPER = -0.3
 
 
 # ------------------------------------------------------------------

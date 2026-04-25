@@ -37,6 +37,8 @@ from src.config import (
     TUNING_MAX_TRIALS,
     CANDIDATE_FEATURES,
     CATEGORICAL_COLS,
+    TARGET,
+    TARGET_RAW,
 )
 from src.features import build_features
 from src.split import expanding_window_cv, final_holdout_split
@@ -90,7 +92,7 @@ def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
 
     # take a smaller random sample for BorutaShap (performance)
     fs_df = df_dev.sample(min(10000, len(df_dev)), random_state=42).reset_index(drop=True)
-    y_fs = fs_df["log_nielsen_total_volume"].values
+    y_fs = fs_df[TARGET].values
     result = run_full_pipeline(
         fs_df[candidates].dropna(),
         candidate_cols=candidates,
@@ -147,14 +149,14 @@ def main():
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)
     df_test = df_fe.iloc[test_idx].reset_index(drop=True)
     df_dev = df_dev.dropna(subset=["nielsen_total_volume"]).reset_index(drop=True)
-    y_dev = df_dev["log_nielsen_total_volume"].values            # always log-space (for metrics)
-    y_raw = df_dev["nielsen_total_volume"].values.astype(float)  # raw volume (for GLM fit)
+    y_dev = df_dev[TARGET].values                       # log litres (for metrics)
+    y_raw = df_dev[TARGET_RAW].values.astype(float)     # raw litres (for GLM fit)
     y_fit = y_raw if expects_raw else y_dev
     if args.objective == "gamma":
         # GammaRegressor requires y > 0; nudge zeros up to avoid fit error.
         y_fit = np.maximum(y_fit, 1e-6)
     print(f"    dev rows={len(df_dev)}, sealed test rows={len(df_test)}")
-    print(f"    objective={args.objective}, y_space_trained_on={'raw_volume' if expects_raw else 'log_volume'}")
+    print(f"    objective={args.objective}, y_space_trained_on={'raw_litres' if expects_raw else 'log_litres'}")
 
     print(f"[2/6] Feature selection pipeline...")
     feature_cols = pick_features(df_dev, model_type)
@@ -273,7 +275,7 @@ def main():
         if expects_raw:
             # raw-volume pred -> log1p so metrics_table's internal expm1 recovers raw
             test_pred = np.log1p(np.clip(test_pred, 0, None))
-        test_metrics = metrics_table(df_test["log_nielsen_total_volume"].values, test_pred)
+        test_metrics = metrics_table(df_test[TARGET].values, test_pred)
         print(f"    sealed-test metrics: {test_metrics}")
         (OUTPUTS / f"test_metrics_{model_type}{suffix}.json").write_text(
             json.dumps(test_metrics, indent=2)
@@ -282,7 +284,7 @@ def main():
     model_path = OUTPUTS / f"model_{model_type}{suffix}.joblib"
     meta_path = OUTPUTS / f"metadata_{model_type}{suffix}.json"
 
-    # Save a self-contained sklearn object that returns raw nielsen_total_volume.
+    # Save a self-contained sklearn object that returns raw volume_in_litres.
     # log-y model -> wrapped in TransformedTargetRegressor(log1p, expm1).
     # raw-y model (GLM) -> bare Pipeline (predict already raw).
     export_champion(champion, df_dev[feature_cols], y_raw, model_path)
@@ -304,7 +306,7 @@ def main():
         "model_type": model_type,
         "objective": args.objective,
         "expects_raw_y": expects_raw,
-        "y_space_trained_on": "raw_volume" if expects_raw else "log_volume",
+        "y_space_trained_on": "raw_litres" if expects_raw else "log_litres",
         "feature_cols": list(feature_cols),
         "best_params": {
             k: (v if isinstance(v, (int, float, str, bool)) else str(v))
@@ -317,10 +319,10 @@ def main():
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
         "versions": versions,
         # Contract for downstream app consumers:
-        "target": "nielsen_total_volume",
+        "target": TARGET_RAW,
         "target_transform": "log1p" if not expects_raw else "none",
-        "predict_returns": "raw_volume",
-        "schema_version": 2,
+        "predict_returns": "raw_litres",
+        "schema_version": 3,
     }
     meta_path.write_text(json.dumps(metadata, indent=2))
     print(f"    saved {model_path} + {meta_path}")

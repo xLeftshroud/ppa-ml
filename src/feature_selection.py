@@ -1,7 +1,7 @@
 """Industrial-grade feature selection: VIF pruning + BorutaShap + stability.
 
 Usage:
-    keep = run_full_pipeline(df, target_col='log_nielsen_total_volume', model_type='xgb')
+    keep = run_full_pipeline(df, target_col='log_volume_in_litres', model_type='xgb')
 """
 from __future__ import annotations
 

@@ -33,12 +33,12 @@ def week(df: pd.DataFrame) -> pd.Series:
 
 def week_sin(df: pd.DataFrame) -> pd.Series:
     """Cyclical sin encoding of week-of-year."""
-    return np.sin(2.0 * np.pi * week(df) / 52.0)
+    return np.sin(2 * np.pi * df["week"] / 52)
 
 
 def week_cos(df: pd.DataFrame) -> pd.Series:
     """Cyclical cos encoding of week-of-year."""
-    return np.cos(2.0 * np.pi * week(df) / 52.0)
+    return np.cos(2 * np.pi * df["week"] / 52)
 
 
 def continuous_week(df: pd.DataFrame) -> pd.Series:
@@ -69,8 +69,29 @@ def pack_tier(df: pd.DataFrame) -> pd.Series:
 
 
 def log_nielsen_total_volume(df: pd.DataFrame) -> pd.Series:
-    """log1p transform of the raw target volume (training target)."""
+    """log1p of raw packs sold. Kept for EDA / legacy comparisons; not the
+    training target (see log_volume_in_litres)."""
     return np.log1p(df["nielsen_total_volume"])
+
+
+def volume_in_litres(df: pd.DataFrame) -> pd.Series:
+    """Liquid volume sold (litres) = packs * units_per_pack * pack_size_ml / 1000.
+
+    nielsen_total_volume is the count of packs sold; multiplying by
+    units_per_package_internal and pack_size_internal/1000 converts to
+    actual liquid litres dispensed, the cross-pack-comparable target.
+    """
+    return (
+        df["nielsen_total_volume"]
+        * df["units_per_package_internal"]
+        * df["pack_size_internal"]
+        / 1000.0
+    )
+
+
+def log_volume_in_litres(df: pd.DataFrame) -> pd.Series:
+    """log1p of liquid volume sold (training target)."""
+    return np.log1p(df["volume_in_litres"].clip(lower=0))
 
 
 def log_price_per_litre(df: pd.DataFrame) -> pd.Series:
@@ -95,5 +116,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     out["pack_size_total"] = pack_size_total(out)
     out["pack_tier"] = pack_tier(out)
     out["log_nielsen_total_volume"] = log_nielsen_total_volume(out)
+    out["volume_in_litres"] = volume_in_litres(out)
+    out["log_volume_in_litres"] = log_volume_in_litres(out)
     out["log_price_per_litre"] = log_price_per_litre(out)
     return out

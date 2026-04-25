@@ -25,7 +25,7 @@ numpyro.set_host_device_count(2)
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import DATA_PATH, OUTPUTS, SEEDS
+from src.config import DATA_PATH, OUTPUTS, SEEDS, TARGET
 from src.features import build_features
 from src.split import expanding_window_cv, final_holdout_split
 from src.models.hier_bayes import BayesianHierModel
@@ -47,7 +47,7 @@ def main():
 
     df = pd.read_csv(DATA_PATH)
     df_fe = build_features(df)
-    df_fe = df_fe.dropna(subset=["log_nielsen_total_volume"]).reset_index(drop=True)
+    df_fe = df_fe.dropna(subset=[TARGET]).reset_index(drop=True)
 
     dev_idx, test_idx = final_holdout_split(df_fe)
     df_dev = df_fe.iloc[dev_idx].reset_index(drop=True)
@@ -78,11 +78,11 @@ def main():
                     random_state=seed,
                 )
                 t0 = time.perf_counter()
-                m_cv.fit(df_tr, df_tr["log_nielsen_total_volume"].values)
+                m_cv.fit(df_tr, df_tr[TARGET].values)
                 dt = time.perf_counter() - t0
                 val_pred = m_cv.predict(df_va)
                 m = metrics_table(
-                    df_va["log_nielsen_total_volume"].values, val_pred, train_time_sec=dt,
+                    df_va[TARGET].values, val_pred, train_time_sec=dt,
                 )
                 m.update({"model": "hier_bayes", "seed": seed, "fold": fi})
                 cv_rows.append(m)
@@ -119,7 +119,7 @@ def main():
         num_chains=args.chains,
     )
     t0 = time.perf_counter()
-    model.fit(df_train, df_train["log_nielsen_total_volume"].values)
+    model.fit(df_train, df_train[TARGET].values)
     dur = time.perf_counter() - t0
     print(f"  fit wall-clock: {dur/60:.1f} min")
     print(f"  n_brand={len(model._brand_codes_)} "
@@ -149,7 +149,7 @@ def main():
 
     if df_val is not None and len(df_val):
         val_pred = model.predict(df_val)
-        m = metrics_table(df_val["log_nielsen_total_volume"].values, val_pred, train_time_sec=dur)
+        m = metrics_table(df_val[TARGET].values, val_pred, train_time_sec=dur)
         (OUTPUTS / f"test_metrics_hier_bayes{suffix}.json").write_text(json.dumps(m, indent=2))
         print(f"  val metrics: {m}")
 
@@ -170,7 +170,7 @@ def main():
         "customer_levels": model._customer_levels_,
         "feature_cols": [
             "log_price_per_litre", "promotion_indicator", "week_sin", "week_cos",
-            "units_per_package_internal", "customer",
+            "customer",
         ],
         "convergence": {
             "rhat_max": rhat_max,

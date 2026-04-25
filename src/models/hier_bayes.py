@@ -12,8 +12,10 @@ Industrial-grade PPA hierarchy for Coca-Cola Europe-style panels:
     beta_cell_final = -exp(beta_cell)            (hard constraint beta <= 0)
 
 Intercept alpha_cell is also hierarchical (pooled to brand). Global coefficients
-on promotion, seasonality, and optional intercept-shift covariates (units per
-pack, log pack size, pack_type dummies, customer dummies).
+on promotion, seasonality, and customer dummies. Pack configuration covariates
+(units, pack size) used to be intercept-shift terms; with the target switched
+to log_volume_in_litres they would be algebraically redundant (target already
+absorbs the log(units * pack_size_ml) shift) and have been removed.
 
 All hierarchies are non-centered to avoid Neal's funnel.
 
@@ -44,7 +46,6 @@ BRAND_COL = "top_brand"
 FLAVOR_COL = "flavor_internal"
 PACK_COL = "pack_tier"
 CUSTOMER_COL = "customer"
-UNITS_COL = "units_per_package_internal"
 
 
 @dataclass
@@ -80,7 +81,6 @@ class BayesianHierModel:
         self._gamma_mean_: float = 0.0
         self._delta_sin_mean_: float = 0.0
         self._delta_cos_mean_: float = 0.0
-        self._theta_units_mean_: float = 0.0
         self._theta_customer_mean_: np.ndarray | None = None
         # per-cell SKU counts (for reporting)
         self._cell_n_skus_: dict | None = None
@@ -160,7 +160,6 @@ class BayesianHierModel:
         promo,
         week_sin,
         week_cos,
-        log_units,
         customer_idx,
         n_customer,
         y=None,
@@ -244,11 +243,6 @@ class BayesianHierModel:
         delta_sin = numpyro.sample("delta_sin", dist.Normal(0.0, 1.0))
         delta_cos = numpyro.sample("delta_cos", dist.Normal(0.0, 1.0))
 
-        # ---------- optional intercept-shift covariates ----------
-        # pack_tier already absorbs size/format structure via alpha_pack;
-        # only units-per-pack (multi-pack count) is kept as an orthogonal control.
-        theta_units = numpyro.sample("theta_units", dist.Normal(0.0, 1.0))
-
         if n_customer > 1:
             # reference category gets 0; sample n_customer-1 offsets
             theta_customer_nonref = numpyro.sample(
@@ -272,7 +266,6 @@ class BayesianHierModel:
             + gamma_promo * promo
             + delta_sin * week_sin
             + delta_cos * week_cos
-            + theta_units * log_units
             + cust_contrib
         )
         numpyro.sample("obs", dist.Normal(mu, sigma_y), obs=y)
@@ -292,11 +285,6 @@ class BayesianHierModel:
         promo = jnp.array(df["promotion_indicator"].to_numpy(), dtype=jnp.float32)
         wsin = jnp.array(df["week_sin"].to_numpy(), dtype=jnp.float32)
         wcos = jnp.array(df["week_cos"].to_numpy(), dtype=jnp.float32)
-        log_units = jnp.array(
-            np.log1p(df[UNITS_COL].to_numpy().astype(np.float32))
-            if UNITS_COL in df.columns else np.zeros(len(df), dtype=np.float32),
-            dtype=jnp.float32,
-        )
         cust_idx_np = self._encode_customer_idx(df)
         cust_idx = jnp.array(cust_idx_np, dtype=jnp.int32)
         n_customer = max(len(self._customer_levels_), 1)
@@ -320,7 +308,6 @@ class BayesianHierModel:
             promo,
             wsin,
             wcos,
-            log_units,
             cust_idx,
             n_customer,
             y_arr,
@@ -360,7 +347,6 @@ class BayesianHierModel:
         self._gamma_mean_ = float(self.samples_["gamma_promo"].mean())
         self._delta_sin_mean_ = float(self.samples_["delta_sin"].mean())
         self._delta_cos_mean_ = float(self.samples_["delta_cos"].mean())
-        self._theta_units_mean_ = float(self.samples_["theta_units"].mean())
         if "theta_customer" in self.samples_:
             self._theta_customer_mean_ = self.samples_["theta_customer"].mean(axis=0)
         else:
@@ -414,10 +400,6 @@ class BayesianHierModel:
         promo = df["promotion_indicator"].to_numpy()
         wsin = df["week_sin"].to_numpy()
         wcos = df["week_cos"].to_numpy()
-        log_units = (
-            np.log1p(df[UNITS_COL].to_numpy().astype(float))
-            if UNITS_COL in df.columns else np.zeros(n)
-        )
 
         cust_idx = self._encode_customer_idx(df)
         if self._theta_customer_mean_.shape[0] >= max(len(self._customer_levels_), 1):
@@ -431,7 +413,6 @@ class BayesianHierModel:
             + self._gamma_mean_ * promo
             + self._delta_sin_mean_ * wsin
             + self._delta_cos_mean_ * wcos
-            + self._theta_units_mean_ * log_units
             + cust_contrib
         )
 
@@ -490,7 +471,6 @@ class BayesianHierModel:
             "gamma_promo",
             "delta_sin",
             "delta_cos",
-            "theta_units",
             "sigma_y",
         ]
         available = [

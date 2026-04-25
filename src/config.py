@@ -17,7 +17,8 @@ TUNING_MAX_TRIALS = 1000
 # so we one-hot anything that fits cheaply and only fall back to TE for high-card columns.
 EN_HIGH_CARD_THRESHOLD = 20
 
-TARGET = "log_nielsen_total_volume"
+TARGET = "log_volume_in_litres"
+TARGET_RAW = "volume_in_litres"  # used as y for Elatic net and GLM models (poisson/gamma/tweedie)
 TIME_COL = "continuous_week"
 DISPLAY_TIME_COL = "yearweek"
 PANEL_KEYS = ["product_sku_code", "customer"]
