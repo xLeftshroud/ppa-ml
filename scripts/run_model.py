@@ -196,7 +196,7 @@ def main():
         model_name=model_type,
         y_fit=y_fit, expects_raw=expects_raw,
     )
-    obj_tag = "" if args.objective == "squared_error" else f"_{args.objective}"
+    obj_tag = f"_{args.objective}"
     suffix = f"{obj_tag}{args.output_suffix}"
     metrics_path = OUTPUTS / f"metrics_{model_type}{suffix}.csv"
     metrics_df.to_csv(metrics_path, index=False)

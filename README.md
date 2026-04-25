@@ -228,8 +228,8 @@ Each run writes five files to `outputs/`:
 | `metadata_<run>.json`         | objective, `feature_cols`, `best_params`, versions     |
 | `model_<run>.joblib`          | exported champion (see "Downstream consumption")       |
 
-Naming convention: `<run> = <model_type>` when `--objective squared_error`,
-otherwise `<model_type>_<objective>` (e.g. `lgb_poisson`, `xgb_tweedie`).
+Naming convention: `<run> = <model_type>_<objective>` for every run
+(e.g. `xgb_squared_error`, `lgb_poisson`, `xgb_tweedie`).
 
 Bayesian runs (`scripts/run_bayesian.py`) write a different set under
 `outputs/` keyed by `<prior> ∈ {weak, moderate, strong}`:
