@@ -139,6 +139,33 @@ def main():
     if rhat_max >= 1.01 or n_div > 0:
         print(f"  [WARN] convergence targets not met (rhat<1.01, divergences==0)")
 
+    # --- Posterior Predictive Check (diagnostic) ---
+    ppc_df = df_train.sample(min(2000, len(df_train)), random_state=42)
+    ppc = model.posterior_predictive(ppc_df, num_samples=200)
+    y_obs = ppc_df[TARGET].values
+    ppc_summary = {
+        "n_rows":    int(len(ppc_df)),
+        "mean_obs":  float(y_obs.mean()),
+        "mean_ppc":  float(ppc.mean()),
+        "std_obs":   float(y_obs.std()),
+        "std_ppc":   float(ppc.std()),
+        "p05_obs":   float(np.quantile(y_obs, 0.05)),
+        "p05_ppc":   float(np.quantile(ppc, 0.05)),
+        "p95_obs":   float(np.quantile(y_obs, 0.95)),
+        "p95_ppc":   float(np.quantile(ppc, 0.95)),
+        "mean_diff": float(abs(y_obs.mean() - ppc.mean())),
+        "std_diff":  float(abs(y_obs.std() - ppc.std())),
+        "pass_mean": bool(abs(y_obs.mean() - ppc.mean()) < 0.05),
+        "pass_std":  bool(abs(y_obs.std() - ppc.std()) < 0.10),
+    }
+    ppc_path = OUTPUTS / f"ppc_summary_hier_bayes{suffix}.json"
+    ppc_path.write_text(json.dumps(ppc_summary, indent=2))
+    print(
+        f"  PPC: obs(mean={ppc_summary['mean_obs']:.2f}, std={ppc_summary['std_obs']:.2f}) "
+        f"vs ppc(mean={ppc_summary['mean_ppc']:.2f}, std={ppc_summary['std_ppc']:.2f}) "
+        f"-> mean_pass={ppc_summary['pass_mean']}, std_pass={ppc_summary['pass_std']}"
+    )
+
     # --- per-cell elasticity posterior ---
     elast = bayesian_elasticity(model, df_dev)
     elast.to_csv(OUTPUTS / f"elasticity_hier_bayes{suffix}.csv", index=False)

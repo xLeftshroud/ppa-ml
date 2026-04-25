@@ -40,8 +40,7 @@ so nothing is shipped — every artifact is produced by one of the three stages.
 cp /path/to/original-dataset.csv dataset/original-dataset.csv
 
 # 2. Run the cleaning notebook end-to-end
-jupyter nbconvert --to notebook --execute \
-    notebooks/01_data_preparation.ipynb --inplace
+jupyter nbconvert --to notebook --execute notebooks/01_data_preparation.ipynb --inplace
 # Or: open in Jupyter/VSCode and "Run All"
 
 # 3. Verify the expected output exists at the configured path
@@ -73,12 +72,10 @@ discipline (100% negative sign, 0% degenerate zeros, 95% HDI).
 
 ```bash
 # Quick single-fit on full dev + sealed-test evaluation (~26 min on CPU):
-python -m scripts.run_bayesian --prior moderate \
-    --draws 2000 --warmup 1000 --chains 2
+python -m scripts.run_bayesian --prior moderate --draws 2000 --warmup 1000 --chains 2
 
 # Full CV (|SEEDS| × N_SPLITS = 3 × 3) + final refit, matches GBM leaderboard schema (~3.5-4 h):
-python -m scripts.run_bayesian --prior moderate \
-    --draws 2000 --warmup 1000 --chains 2 --cv
+python -m scripts.run_bayesian --prior moderate --draws 2000 --warmup 1000 --chains 2 --cv
 
 # Prior sensitivity sweep (optional, each run is independent):
 python -m scripts.run_bayesian --prior weak   --draws 2000 --warmup 1000 --cv
@@ -188,10 +185,7 @@ Produced artifacts live under `outputs/`.
 ## Training a single run
 
 ```
-python -m scripts.run_model \
-    --model {elastic_net|hgb|xgb|lgb} \
-    --objective {squared_error|poisson|tweedie|gamma} \
-    [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
+python -m scripts.run_model --model {elastic_net|hgb|xgb|lgb} --objective {squared_error|poisson|tweedie|gamma} [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
 ```
 
 Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/run_model.py#L68):

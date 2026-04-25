@@ -257,7 +257,15 @@ class BayesianHierModel:
         else:
             cust_contrib = 0.0
 
-        sigma_y = numpyro.sample("sigma_y", dist.HalfNormal(1.0))
+        # heteroskedastic per-cell observation noise: large cells (big SKUs at
+        # major retailers) carry larger absolute residual variance than niche
+        # cells. A single global sigma over-confidences the big and under-
+        # confidences the small; per-cell sigma calibrates the 95% HDI.
+        sigma_y_cell = numpyro.sample(
+            "sigma_y_cell",
+            dist.HalfNormal(1.0).expand([n_cell]).to_event(1),
+        )
+        sigma_obs = sigma_y_cell[cell_idx]
 
         # ---------- likelihood ----------
         mu = (
@@ -268,7 +276,7 @@ class BayesianHierModel:
             + delta_cos * week_cos
             + cust_contrib
         )
-        numpyro.sample("obs", dist.Normal(mu, sigma_y), obs=y)
+        numpyro.sample("obs", dist.Normal(mu, sigma_obs), obs=y)
 
     # ------------------------------------------------------------------
     # Fit
@@ -334,6 +342,7 @@ class BayesianHierModel:
             "eps_cell_raw": ["cell"],
             "mu_alpha_brand": ["brand"],
             "mu_alpha_brand_raw": ["brand"],
+            "sigma_y_cell": ["cell"],
         }
         self.idata_ = az.from_numpyro(mcmc, coords=coords, dims=dims)
 
@@ -451,6 +460,58 @@ class BayesianHierModel:
             )
         return pd.DataFrame(rows)
 
+    def posterior_predictive(
+        self,
+        df: pd.DataFrame,
+        num_samples: int = 200,
+        random_seed: int | None = None,
+    ) -> np.ndarray:
+        """Generate (num_samples, n_rows) posterior predictive draws of
+        log_volume_in_litres for `df`. Used to compare model-implied vs observed
+        distributions (Posterior Predictive Check)."""
+        from numpyro.infer import Predictive
+        import jax.random as jrand
+        import jax.numpy as jnp
+
+        assert self.samples_ is not None, "call fit() first"
+
+        # encode rows; unknown cell defaults to 0 (best-effort for diagnostic only)
+        cell_idx_np = np.array(
+            [
+                self._cell_codes_.get((b, f, p), 0)
+                for b, f, p in zip(
+                    df[BRAND_COL].values,
+                    df[FLAVOR_COL].values,
+                    df[PACK_COL].values,
+                )
+            ],
+            dtype=np.int32,
+        )
+        cust_idx_np = self._encode_customer_idx(df)
+        n_customer = max(len(self._customer_levels_), 1)
+
+        # subsample posterior to keep PPC fast
+        seed = random_seed if random_seed is not None else self.random_state + 1
+        rng = np.random.default_rng(seed)
+        n_draws = next(iter(self.samples_.values())).shape[0]
+        take = min(num_samples, n_draws)
+        idx = rng.choice(n_draws, size=take, replace=False)
+        sub_samples = {k: v[idx] for k, v in self.samples_.items()}
+
+        predictive = Predictive(self._model, posterior_samples=sub_samples)
+        out = predictive(
+            jrand.PRNGKey(seed),
+            jnp.array(cell_idx_np, dtype=jnp.int32),
+            jnp.array(df["log_price_per_litre"].to_numpy(), dtype=jnp.float32),
+            jnp.array(df["promotion_indicator"].to_numpy(), dtype=jnp.float32),
+            jnp.array(df["week_sin"].to_numpy(), dtype=jnp.float32),
+            jnp.array(df["week_cos"].to_numpy(), dtype=jnp.float32),
+            jnp.array(cust_idx_np, dtype=jnp.int32),
+            n_customer,
+            y=None,
+        )
+        return np.asarray(out["obs"])
+
     def convergence_summary(self) -> pd.DataFrame:
         """Return az.summary for the key scalar / vector hyperparameters."""
         import arviz as az
@@ -471,7 +532,7 @@ class BayesianHierModel:
             "gamma_promo",
             "delta_sin",
             "delta_cos",
-            "sigma_y",
+            "sigma_y_cell",
         ]
         available = [
             v for v in var_names if v in self.idata_.posterior.data_vars
