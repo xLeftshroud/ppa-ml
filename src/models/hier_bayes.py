@@ -300,7 +300,7 @@ class BayesianHierModel:
         y_arr = jnp.array(np.asarray(y), dtype=jnp.float32)
         cell_idx = jnp.array(cell_idx_np, dtype=jnp.int32)
 
-        kernel = NUTS(self._model, target_accept_prob=0.9)
+        kernel = NUTS(self._model, target_accept_prob=0.95)
         mcmc = MCMC(
             kernel,
             num_warmup=self.num_warmup,
