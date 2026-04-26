@@ -18,7 +18,7 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
    elasticity plausibility.
 4. Optionally runs a **Bayesian hierarchical track** (`scripts/run_bayesian.py`)
    with non-centered brand-nested + flavor/pack crossed random effects,
-   hard sign constraint `β < 0` via `-exp(·)`, and `ZeroSumNormal` priors on
+   hard sign constraint `β < 0` via `-softplus(·)`, and `ZeroSumNormal` priors on
    crossed effects. Emits per-cell `(top_brand × flavor_internal × pack_tier)`
    elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
 
@@ -90,11 +90,13 @@ python -m scripts.compare_runs --metric rmse
 Model structure:
 
 - **Cells** = `(top_brand × flavor_internal × pack_tier)` — the PPA decision unit
-- **Slope hierarchy**: `β_cell = -exp(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
+- **Slope hierarchy**: `β_cell = -softplus(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
   enforcing `β_cell < 0` by construction; `α_flavor` and `α_pack` use
-  `ZeroSumNormal` to remove additive redundancy with `μ_brand`
+  `ZeroSumNormal` to remove additive redundancy with `μ_brand`. softplus
+  replaces an earlier `-exp(·)` for bounded jacobian (sigmoid in [0,1]),
+  fixing NUTS step-size adaptation on the hierarchical sigmas.
 - **Intercept hierarchy**: `α_cell` pooled to `μ_alpha_brand`, non-centered
-- **Priors**: `mu_global ~ Normal(0.5, 1)` (moderate) → prior mean elasticity ≈ `-1.65`
+- **Priors**: `mu_global ~ Normal(1.5, 1)` (moderate) → prior mean elasticity = `-softplus(1.5) ≈ -1.70`
 - **Controls**: promotion, sin/cos seasonality, customer dummies
 - **Inference**: NUTS with 2 parallel chains (`numpyro.set_host_device_count(2)`
   at script top), `target_accept_prob=0.9`
