@@ -219,6 +219,28 @@ defaults to `TUNING_WALLCLOCK_SEC = 3600`). Optuna persists trials in
 `(model, objective, metric, seed)` continues the existing study rather than
 starting over.
 
+### Feature-selection cache
+
+Feature selection is **objective-agnostic** — `pick_features` always trains
+the BorutaShap surrogate against `log_volume_in_litres` regardless of
+`--objective`, so all 4 objectives of e.g. `xgb` produce identical
+`feature_cols`. The first run for a given model_type runs BorutaShap and
+writes the selection to `outputs/feature_cols_<model_type>.json`. Subsequent
+runs of the **same model_type** (any objective) load the cache and skip
+BorutaShap — typically saves ~5-8 min per run.
+
+```bash
+python -m scripts.run_model --model xgb --objective squared_error  # writes outputs/feature_cols_xgb.json
+python -m scripts.run_model --model xgb --objective poisson        # uses cache, skips BorutaShap
+python -m scripts.run_model --model xgb --objective tweedie        # uses cache, skips BorutaShap
+python -m scripts.run_model --model xgb --reselect-features        # force re-run, overwrites cache
+```
+
+Stale-cache safety: if a cached feature is no longer present in `df_dev.columns`
+(e.g. you removed a categorical from `CATEGORICAL_COLS`), the runner detects
+this and re-selects automatically. Manually `rm outputs/feature_cols_<model>.json`
+is equivalent to `--reselect-features` for one model.
+
 Each run writes five files to `outputs/`:
 
 | file                          | contents                                               |

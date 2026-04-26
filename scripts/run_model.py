@@ -37,6 +37,7 @@ from src.config import (
     TUNING_MAX_TRIALS,
     CANDIDATE_FEATURES,
     CATEGORICAL_COLS,
+    PROTECTED_FEATURES,
     TARGET,
     TARGET_RAW,
 )
@@ -110,6 +111,52 @@ def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
     return final_numeric
 
 
+def _feature_cache_path(model_type: str) -> Path:
+    return OUTPUTS / f"feature_cols_{model_type}.json"
+
+
+def load_or_pick_features(
+    df_dev: pd.DataFrame, model_type: str, force_reselect: bool = False
+) -> list[str]:
+    """Return cached feature_cols if available; otherwise run pick_features
+    and persist the result for next time.
+
+    Cache is keyed by model_type (not objective) because pick_features is
+    objective-agnostic: y_fs = TARGET = log_volume_in_litres regardless of
+    the user's --objective choice, and `_make_fs_estimator` returns a
+    default-configured surrogate. So all 4 objectives of e.g. xgb produce
+    identical feature_cols.
+    """
+    cache_path = _feature_cache_path(model_type)
+    if cache_path.exists() and not force_reselect:
+        cached = json.loads(cache_path.read_text())
+        feature_cols = cached["feature_cols"]
+        missing = [c for c in feature_cols if c not in df_dev.columns]
+        if missing:
+            print(f"    cache at {cache_path.name} has features missing "
+                  f"from df_dev: {missing}; re-selecting...")
+        else:
+            print(f"    using cached feature_cols from {cache_path.name} "
+                  f"(selected_at_utc={cached.get('selected_at_utc', 'unknown')})")
+            return feature_cols
+
+    feature_cols = pick_features(df_dev, model_type)
+    cache_path.write_text(json.dumps({
+        "model_type": model_type,
+        "feature_cols": feature_cols,
+        "n_features": len(feature_cols),
+        "selected_at_utc": datetime.now(timezone.utc).isoformat(),
+        "candidate_features_at_selection": [c for c in CANDIDATE_FEATURES
+                                            if c in df_dev.columns],
+        "categorical_cols_at_selection": [c for c in CATEGORICAL_COLS
+                                          if c in df_dev.columns],
+        "protected_features_at_selection": [c for c in PROTECTED_FEATURES
+                                            if c in df_dev.columns],
+    }, indent=2))
+    print(f"    saved {cache_path.name}")
+    return feature_cols
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, choices=list(MODEL_CLASSES.keys()))
@@ -118,6 +165,14 @@ def main():
                     help="Hard cap on Optuna trials; wall-clock usually triggers first.")
     ap.add_argument("--seeds", type=int, nargs="+", default=SEEDS)
     ap.add_argument("--skip-tune", action="store_true")
+    ap.add_argument(
+        "--reselect-features",
+        action="store_true",
+        help="Force feature selection to re-run, ignoring any cached "
+             "outputs/feature_cols_<model>.json. The new selection overwrites "
+             "the cache. Use after changing CANDIDATE_FEATURES, CATEGORICAL_COLS, "
+             "or the FS surrogate config.",
+    )
     ap.add_argument("--output-suffix", default="")
     ap.add_argument(
         "--metric",
@@ -161,8 +216,10 @@ def main():
     print(f"    dev rows={len(df_dev)}, sealed test rows={len(df_test)}")
     print(f"    objective={args.objective}, y_space_trained_on={'raw_litres' if expects_raw else 'log_litres'}")
 
-    print(f"[2/6] Feature selection pipeline...")
-    feature_cols = pick_features(df_dev, model_type)
+    print(f"[2/6] Feature selection (cache: outputs/feature_cols_{model_type}.json)...")
+    feature_cols = load_or_pick_features(
+        df_dev, model_type, force_reselect=args.reselect_features
+    )
     print(f"    {len(feature_cols)} features: {feature_cols}")
 
     folds = expanding_window_cv(df_dev)
