@@ -5,7 +5,8 @@ Five model-specific extractors return a uniform DataFrame:
 
 Plausibility checks:
     - sign_test:       share of SKUs with beta < 0 (target > 95%)
-    - magnitude_test:  share of SKUs with beta in [-3.5, -0.5]
+    - magnitude_test:  share of SKUs with beta in [SOFT_DRINK_LOWER, SOFT_DRINK_UPPER]
+                       (currently [-3.5, -0.3]; see constants below)
     - stability:       coefficient of variation across bootstraps (target < 0.3)
 """
 from __future__ import annotations

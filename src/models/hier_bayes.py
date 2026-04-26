@@ -391,7 +391,10 @@ class BayesianHierModel:
         a_f = float(self._alpha_flavor_mean_[f_idx]) if f_idx is not None else 0.0
         a_p = float(self._alpha_pack_mean_[p_idx]) if p_idx is not None else 0.0
         beta_raw = mu_b + a_f + a_p
-        beta = -float(np.exp(beta_raw))
+        # softplus parity with training (line 227): -log1p(exp(beta_raw)).
+        # np.logaddexp(0, x) is the numerically stable softplus and matches
+        # jax.nn.softplus used during fit.
+        beta = -float(np.logaddexp(0.0, beta_raw))
         alpha = mu_ab  # sigma_alpha_cell * raw defaults to 0 for new cell
         return alpha, beta
 

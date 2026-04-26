@@ -1,7 +1,7 @@
-"""Statistical significance tests for the 5-model comparison.
+"""Statistical significance tests for the multi-model comparison.
 
-Given a long DataFrame (model, seed, fold, wmape, ...) with N_models x 20
-observations (5 seeds x 4 folds), runs:
+Given a long DataFrame (model, seed, fold, wmape, ...) with N_models x
+(|SEEDS| * N_SPLITS) observations (default 3 seeds x 3 folds = 9), runs:
   - Friedman test           -> chi-square + p-value + avg rank per model
   - Nemenyi post-hoc         -> pairwise p-value matrix
   - Wilcoxon signed-rank    -> pairwise p-value + Cohen's d (effect size)

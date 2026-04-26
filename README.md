@@ -48,12 +48,13 @@ python -c "from src.config import DATA_PATH; assert DATA_PATH.exists(); print(DA
 ```bash
 # Run any subset of the 17 combos; each run --timeout 60 seconds of tuning for quick run
 python -m scripts.run_model --model elastic_net --objective squared_error --timeout 60
+python -m scripts.run_model --model rf --timeout 60
 python -m scripts.run_model --model xgb --objective poisson --timeout 60
 python -m scripts.run_model --model lgb --objective tweedie --timeout 60
-python -m scripts.run_model --model rf  --objective squared_error --timeout 60
+python -m scripts.run_model --model hgb  --objective squared_error --timeout 60
 ```
 
-*See "Training a single run" below for the full matrix*
+*See "Training a single run" below for the full matrix and details*
 
 ### Stage 3 — Bayesian hierarchical model (optional)
 
@@ -93,6 +94,7 @@ python -m scripts.compare_runs
   - `customer`,
   - `nielsen_total_volume`,
   - `price_per_item`,
+  - `promotion_indicator`,
   - `pack_size_internal`,
   - `units_per_package_internal`,
   - `top_brand`,
@@ -125,11 +127,20 @@ ppa-ml/
 ├── notebooks/
 │   ├── 01_data_preparation.ipynb      # raw -> cleaned
 │   └── 02_eda.ipynb                   # exploratory analysis
+├── old_notebooks/                     # v1 legacy notebooks (kept for reference, superseded by src/)
+│   ├── elastic_net.ipynb
+│   ├── random_forest.ipynb
+│   ├── xgboost.ipynb
+│   ├── svr.ipynb
+│   └── bayesian_hirarchical_regression.ipynb
 ├── scripts/
 │   ├── run_model.py                   # training entry for the 5 ML families
 │   ├── run_bayesian.py                # hierarchical Bayes track
+│   ├── run_baselines.py               # naive + seasonal_naive only, no ML training
 │   ├── reextract_elasticity.py        # refresh SKU-β from joblibs (no retrain)
 │   └── compare_runs.py                # 4-layer comparison + champion pick
+├── tests/
+│   └── test_pipeline.py               # smoke tests (feature engineering, CV, baselines, elastic_net fit)
 └── src/
     ├── config.py                      # paths, seeds, feature groups
     ├── features.py                    # row-wise feature engineering
@@ -325,7 +336,7 @@ A run becomes champion **iff it passes all four gates** (baselines are excluded 
 | `gate_cv`    | `cv_rank ≤ --top-k`                                                                             |
 | `gate_sig`   | `p_value < 0.05` vs `seasonal_naive` (Nemenyi if available, else Wilcoxon)                      |
 | `gate_sealed`| `sealed_rank ≤ --top-k`                                                                         |
-| `gate_elast` | `sign_test_pass_nonzero == True` (≥95% of non-zero β are negative) **AND** `share_in_soft_drink_range > 0.5` (>50% of β lie in `[-3.5, -0.5]`) |
+| `gate_elast` | `sign_test_pass_nonzero == True` (≥95% of non-zero β are negative) **AND** `share_in_soft_drink_range > 0.5` (>50% of β lie in `[-3.5, -0.3]`) |
 
 If any gate fails, the script prints the top candidates ranked by `gates_passed` and the blocking gate, and skips writing `champion_card.json`. Tiebreaker among gate-passers: lowest CV `--metric`.
 

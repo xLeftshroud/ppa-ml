@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.experiments import summarize
 from src.stats_tests import friedman_test, wilcoxon_pairwise
-from src.elasticity import plausibility_scorecard
+from src.elasticity import plausibility_scorecard, SOFT_DRINK_LOWER, SOFT_DRINK_UPPER
 
 
 BASELINES = {"naive", "seasonal_naive"}
@@ -345,7 +345,7 @@ def main() -> None:
         print(f"  vs seasonal_naive:   p = {card['p_vs_seasonal_naive']:.2e}")
         print(f"  Elasticity:          {card['share_negative_beta']*100:.0f}% negative, "
               f"median β = {card['median_beta']:.2f}, "
-              f"{card['share_in_soft_drink_range']*100:.0f}% in [-3.5, -0.5]")
+              f"{card['share_in_soft_drink_range']*100:.0f}% in [{SOFT_DRINK_LOWER}, {SOFT_DRINK_UPPER}]")
         print(f"  joblib: {card['joblib_path']}")
         print(f"  saved {outputs_dir / 'champion_card.json'}")
     print("=" * 80)

@@ -5,10 +5,10 @@ Usage (from project root):
 
 Pipeline:
   1. Load + engineer features (leakage-free)
-  2. Split: sealed 2025H2 test set; dev set -> 4 expanding-window folds
+  2. Split: sealed last-TEST_WEEK_RATIO test set; dev set -> N_SPLITS expanding-window folds
   3. Feature selection (domain core + VIF + BorutaShap + stability) on fold-1 train
   4. Optuna tuning on CV (wall-clock timeout)
-  5. Refit best params across 5 seeds x 4 folds; save metrics_<model>.csv
+  5. Refit best params across |SEEDS| seeds x N_SPLITS folds; save metrics_<model>.csv
   6. Evaluate on sealed test set; save elasticity_<model>.csv + model pickle
 
 The Bayesian track has its own runner, `scripts/run_bayesian.py`.

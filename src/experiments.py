@@ -1,8 +1,9 @@
 """Multi-seed x multi-fold experiment runner.
 
-For each of 5 seeds, for each of 4 CV folds, fits a model using the
-provided builder and returns a long DataFrame of metrics. This is the
-input to the statistical tests (Friedman / Nemenyi / Wilcoxon).
+For each seed in SEEDS, for each of N_SPLITS expanding-window CV folds,
+fits a model using the provided builder and returns a long DataFrame of
+metrics. Default config -> 3 seeds x 3 folds = 9 rows per model. This is
+the input to the statistical tests (Friedman / Nemenyi / Wilcoxon).
 """
 from __future__ import annotations
 
@@ -73,7 +74,8 @@ def run_baseline_across_seeds(
     model_name: str = "baseline",
 ) -> pd.DataFrame:
     """Baselines are deterministic, but we replicate them across seeds so they
-    line up in the Friedman table with 20 observations per model."""
+    line up in the Friedman table with len(SEEDS) * N_SPLITS observations
+    per model (default 9)."""
     seeds = seeds or SEEDS
     folds = expanding_window_cv(df_dev)
     rows = []
