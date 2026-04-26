@@ -1,4 +1,4 @@
-"""Unified runner for any of the 4 ML models (elastic_net/hgb/xgb/lgb).
+"""Unified runner for any of the 5 ML models (elastic_net/hgb/xgb/lgb/rf).
 
 Usage (from project root):
     python -m scripts.run_model --model xgb --timeout 3600
@@ -54,6 +54,7 @@ from src.models.elastic_net import ElasticNetModel
 from src.models.hgb import HGBModel
 from src.models.xgb import XGBModel
 from src.models.lgb import LGBModel
+from src.models.rf import RFModel
 from src.models.export import export_champion
 
 
@@ -62,8 +63,9 @@ MODEL_CLASSES = {
     "hgb": HGBModel,
     "xgb": XGBModel,
     "lgb": LGBModel,
+    "rf":  RFModel,
 }
-PASSES_VAL = {"elastic_net": False, "hgb": False, "xgb": True, "lgb": True}
+PASSES_VAL = {"elastic_net": False, "hgb": False, "xgb": True, "lgb": True, "rf": False}
 
 # Which --objective values each model supports. Argparse accepts the union;
 # we enforce per-model compatibility after parse.
@@ -72,6 +74,7 @@ _MODEL_OBJ_SUPPORTED = {
     "xgb":         {"squared_error", "poisson", "tweedie", "gamma"},
     "lgb":         {"squared_error", "poisson", "tweedie", "gamma"},
     "hgb":         {"squared_error", "poisson", "gamma"},
+    "rf":          {"squared_error", "poisson"},
 }
 _RAW_Y_OBJECTIVES = {"poisson", "tweedie", "gamma"}
 
@@ -102,7 +105,7 @@ def pick_features(df_dev: pd.DataFrame, model_type: str) -> list[str]:
     )
     final_numeric = result["final"]
     # always include categoricals for tree models
-    if model_type in ("xgb", "lgb", "hgb"):
+    if model_type in ("xgb", "lgb", "hgb", "rf"):
         return list(dict.fromkeys(final_numeric + cats_in))
     return final_numeric
 

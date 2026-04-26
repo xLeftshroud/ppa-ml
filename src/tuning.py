@@ -15,9 +15,10 @@ from .models.elastic_net import ElasticNetModel
 from .models.hgb import HGBModel
 from .models.xgb import XGBModel
 from .models.lgb import LGBModel
+from .models.rf import RFModel
 
 
-MODEL_TYPES = ("elastic_net", "hgb", "xgb", "lgb")
+MODEL_TYPES = ("elastic_net", "hgb", "xgb", "lgb", "rf")
 
 # Per-model boosting-round ceiling during tuning. Early stopping inside each
 # model's fit() picks the real best_iteration per fold -- these are just the
@@ -140,11 +141,27 @@ def _suggest_lgb(trial, seed, objective):
     )
 
 
+def _suggest_rf(trial, seed, objective):
+    # No early stopping for RF; n_estimators is tuned directly.
+    # max_depth is bounded (no None) to keep trial wall-clock predictable.
+    return RFModel(
+        n_estimators=trial.suggest_int("n_estimators", 300, 1200),
+        max_depth=trial.suggest_int("max_depth", 4, 24),
+        min_samples_split=trial.suggest_int("min_samples_split", 2, 40),
+        min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 40),
+        max_features=trial.suggest_float("max_features", 0.3, 1.0),
+        max_samples=trial.suggest_float("max_samples", 0.5, 1.0),
+        random_state=seed,
+        objective=objective,
+    )
+
+
 _SUGGESTERS = {
     "elastic_net": (_suggest_elastic_net, False),
     "hgb":         (_suggest_hgb,         False),
     "xgb":         (_suggest_xgb,         True),
     "lgb":         (_suggest_lgb,         True),
+    "rf":          (_suggest_rf,          False),
 }
 
 
