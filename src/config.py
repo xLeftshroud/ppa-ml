@@ -51,8 +51,7 @@ CANDIDATE_FEATURES = [
 PROTECTED_FEATURES = [
     "price_per_litre",
     "log_price_per_litre",
-    # "promotion_indicator",
-    # "pack_size_internal",
-    # "units_per_package_internal",
-    # "continuous_week",
+    "week_sin",
+    "week_cos",
+    "continuous_week",
 ]

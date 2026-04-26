@@ -321,21 +321,32 @@ def run_full_pipeline(
 ) -> dict:
     """Full 4-step industrial feature selection.
 
-    Tree models (xgb/lgb/hgb): VIF -> BorutaShap -> (optional) Stability.
-    Elastic Net:              VIF -> L1 (ElasticNetCV) -> (optional) L1 Stability.
+    Tree models (xgb/lgb/hgb/rf): correlation_prune -> BorutaShap -> (optional) Stability.
+    Elastic Net:                  correlation_prune -> VIF -> L1 (ElasticNetCV) -> (optional) L1 Stability.
+
+    VIF is a linear-model concept (it stabilizes OLS coefficients under
+    multicollinearity). Trees are immune to multicollinearity for prediction
+    and VIF would drop useful composite features like pack_size_total
+    (deterministic product of two others) that trees can leverage as a
+    pre-built interaction. So VIF runs only on the elastic_net branch.
+
     Boruta is skipped for Elastic Net -- L1 sparsity IS the selector;
     external shadow/SHAP is not meaningful for linear models.
 
-    Returns a dict with keys: step1_core, step2_after_vif, step3_*, step4_stable, final.
+    Returns a dict whose intermediate keys differ by branch:
+      tree:        step1_core, step2_after_corr, step3_boruta,    step4_stable, final
+      elastic_net: step1_core, step2_after_corr, step2_after_vif, step3_l1_select,
+                   step3_info, step4_stable, final
     """
     protected = [c for c in PROTECTED_FEATURES if c in candidate_cols]
 
-    # Step 2: VIF + correlation
+    # Step 2a (always): correlation pruning at |r| > 0.95
     after_corr = correlation_prune(df, candidate_cols, protected=protected)
-    after_vif = vif_prune(df, after_corr, protected=protected)
 
-    # Elastic Net branch: L1-based selection, symmetric to Boruta for trees
+    # Elastic Net branch: VIF -> L1 -> stability
     if model_type == "elastic_net":
+        # Step 2b (linear only): VIF for multivariate collinearity
+        after_vif = vif_prune(df, after_corr, protected=protected)
         X_lin = df[after_vif].dropna().astype(float)
         y_lin = np.asarray(y)[df.index.get_indexer(X_lin.index)]
         try:
@@ -357,6 +368,7 @@ def run_full_pipeline(
         final = list(dict.fromkeys(protected + stable_lin))
         return {
             "step1_core": protected,
+            "step2_after_corr": after_corr,
             "step2_after_vif": after_vif,
             "step3_l1_select": l1_sel,
             "step3_info": l1_info,
@@ -365,15 +377,15 @@ def run_full_pipeline(
             "final": final,
         }
 
-    # Step 3: BorutaShap single run
-    X = df[after_vif].dropna().astype(float)
+    # Tree branch: BorutaShap on the correlation-pruned set (no VIF)
+    X = df[after_corr].dropna().astype(float)
     y_aligned = np.asarray(y)[df.index.get_indexer(X.index)]
     try:
         boruta_sel = borutashap_select(X, y_aligned, model_type=model_type,
                                        random_state=random_state)
     except Exception as e:
-        boruta_sel = after_vif  # fallback: accept all non-collinear
-        print(f"[feature_selection] BorutaShap failed: {e}. Falling back to VIF set.")
+        boruta_sel = after_corr  # fallback: accept all non-collinear
+        print(f"[feature_selection] BorutaShap failed: {e}. Falling back to corr-pruned set.")
 
     # Step 4: stability selection
     stable: list[str] = boruta_sel
@@ -390,7 +402,7 @@ def run_full_pipeline(
     final = list(dict.fromkeys(protected + stable))
     return {
         "step1_core": protected,
-        "step2_after_vif": after_vif,
+        "step2_after_corr": after_corr,
         "step3_boruta": boruta_sel,
         "step4_stable": stable,
         "step4_frequencies": freqs,
