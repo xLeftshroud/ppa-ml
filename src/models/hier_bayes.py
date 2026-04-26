@@ -9,7 +9,7 @@ Industrial-grade PPA hierarchy for Coca-Cola Europe-style panels:
               + alpha_pack[p(c)]                 (crossed random effect, PPA core)
               + eps_cell[c]                      (additive-break residual)
 
-    beta_cell_final = -exp(beta_cell)            (hard constraint beta <= 0)
+    beta_cell_final = -softplus(beta_cell)       (hard constraint beta <= 0)
 
 Intercept alpha_cell is also hierarchical (pooled to brand). Global coefficients
 on promotion, seasonality, and customer dummies. Pack configuration covariates
@@ -21,11 +21,13 @@ All hierarchies are non-centered to avoid Neal's funnel.
 
 Prior sensitivity (``prior_scale``):
     weak     -> mu_global ~ Normal(0, 5),   sigma_* inflated
-    moderate -> mu_global ~ Normal(0.5, 1), sigma_* nominal        (default)
-    strong   -> mu_global ~ Normal(0.5, 0.5), sigma_* shrunk
+    moderate -> mu_global ~ Normal(1.5, 1), sigma_* nominal        (default)
+    strong   -> mu_global ~ Normal(1.5, 0.5), sigma_* shrunk
 
-Prior-mean own-price elasticity = -exp(mu_loc): moderate -> -exp(0.5) ~ -1.65,
-matching the -1.5..-3 beverage-category consensus in the literature.
+Prior-mean own-price elasticity = -softplus(mu_loc): moderate -> -softplus(1.5)
+~ -1.70, matching the -1.5..-3 beverage-category consensus in the literature.
+softplus replaces exp for bounded jacobian (sigmoid in [0,1]) - exp's unbounded
+gradient was wrecking NUTS step-size adaptation on the hierarchical sigmas.
 """
 from __future__ import annotations
 
@@ -38,8 +40,8 @@ import pandas as pd
 
 PRIOR_CONFIGS: dict[str, dict] = {
     "weak":     {"mu_loc": 0.0, "mu_scale": 5.0, "sigma_scale": 2.0},
-    "moderate": {"mu_loc": 0.5, "mu_scale": 1.0, "sigma_scale": 1.0},
-    "strong":   {"mu_loc": 0.5, "mu_scale": 0.5, "sigma_scale": 0.5},
+    "moderate": {"mu_loc": 1.5, "mu_scale": 1.0, "sigma_scale": 1.0},
+    "strong":   {"mu_loc": 1.5, "mu_scale": 0.5, "sigma_scale": 0.5},
 }
 
 BRAND_COL = "top_brand"
@@ -167,6 +169,7 @@ class BayesianHierModel:
         import numpyro
         import numpyro.distributions as dist
         import jax.numpy as jnp
+        import jax.nn as jnn
 
         pc = PRIOR_CONFIGS[self.prior_scale]
         s = pc["sigma_scale"]
@@ -218,8 +221,10 @@ class BayesianHierModel:
             + alpha_pack[cell_to_pack]
             + eps_cell
         )
-        # hard constraint: beta_cell <= 0
-        beta_cell = numpyro.deterministic("beta_cell", -jnp.exp(beta_cell_raw))
+        # hard constraint: beta_cell <= 0. softplus replaces exp for bounded
+        # jacobian (sigmoid in [0,1]) - avoids the unbounded-gradient pathology
+        # that wrecks NUTS step-size adaptation in hierarchical sigma params.
+        beta_cell = numpyro.deterministic("beta_cell", -jnn.softplus(beta_cell_raw))
 
         # ---------- intercept hierarchy (non-centered) ----------
         mu_alpha_global = numpyro.sample("mu_alpha_global", dist.Normal(0.0, 5.0))
@@ -300,7 +305,7 @@ class BayesianHierModel:
         y_arr = jnp.array(np.asarray(y), dtype=jnp.float32)
         cell_idx = jnp.array(cell_idx_np, dtype=jnp.int32)
 
-        kernel = NUTS(self._model, target_accept_prob=0.95)
+        kernel = NUTS(self._model, target_accept_prob=0.9)
         mcmc = MCMC(
             kernel,
             num_warmup=self.num_warmup,
