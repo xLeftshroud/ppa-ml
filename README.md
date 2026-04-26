@@ -4,35 +4,29 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
 
 ## What it does
 
-1. Trains a grid of up to **17 `(model × objective)` combinations** across five
-   ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM,
-   RandomForest (`rf`) — each with industry-standard regression losses
-   (`squared_error` / `poisson` / `tweedie` / `gamma`). Tree models enforce a
-   monotone constraint `∂E[volume] / ∂price ≤ 0` on `price_per_litre`. RF acts
-   as a bagging-based sanity check alongside the three boosters.
-2. Tunes each combination with **Optuna TPE + fold-level MedianPruner** under a
-   one-hour wall-clock budget, validates on expanding-window CV over
-   `continuous_week`, then evaluates once on a sealed 2025H2 holdout.
-3. Picks a champion via the **Demšar (2006) four-layer evidence framework**:
-   CV leaderboard + Friedman / Nemenyi significance + sealed-test rank +
-   elasticity plausibility.
-4. Optionally runs a **Bayesian hierarchical track** (`scripts/run_bayesian.py`)
-   with non-centered brand-nested + flavor/pack crossed random effects,
-   hard sign constraint `β < 0` via `-softplus(·)`, and `ZeroSumNormal` priors on
-   crossed effects. Emits per-cell `(top_brand × flavor_internal × pack_tier)`
-   elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
+1. Trains a grid of up to **17 `(model × objective)` combinations** across five ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM, RandomForest (`rf`) — each with industry-standard regression losses (`squared_error` / `poisson` / `tweedie` / `gamma`). Tree models enforce a monotone constraint `∂E[volume] / ∂price ≤ 0` on `price_per_litre`. RF acts as a bagging-based sanity check alongside the three boosters.
+2. Tunes each combination with **Optuna TPE + fold-level MedianPruner** under a one-hour wall-clock budget, validates on expanding-window CV over
+   `continuous_week`, then evaluates once on a sealed test set.
+3. Picks a champion via the **Demšar (2006) four-layer evidence framework**: CV leaderboard + Friedman / Nemenyi significance + sealed-test rank + elasticity plausibility.
+4. Optionally runs a **Bayesian hierarchical track** (`scripts/run_bayesian.py`) with non-centered brand-nested + flavor/pack crossed random effects, hard sign constraint `β < 0` via `-softplus(·)`, and `ZeroSumNormal` priors on crossed effects. Emits per-cell `(top_brand × flavor_internal × pack_tier)` elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
 
-The eventual deliverable is an `outputs/model_<run>.joblib` whose `.predict()`
-returns raw `volume_in_litres` (industry-standard PPA target — packs × units
-per pack × pack_size_ml / 1000 — for cross-pack-comparable elasticity) and a
-matching `elasticity_<run>.csv` with per-SKU
-`(beta_mean, beta_lo, beta_hi, beta_std)` from a symmetric central
-finite-difference on the trained model.
+The eventual deliverable is an `outputs/model_<run>.joblib` whose `.predict()` returns raw `volume_in_litres` (industry-standard PPA target — packs × units per pack × pack_size_ml / 1000 — for cross-pack-comparable elasticity) and a matching `elasticity_<run>.csv` with per-SKU `(beta_mean, beta_lo, beta_hi, beta_std)` from a symmetric central finite-difference on the trained model.
+
+------
+
+## Installation
+
+```bash
+python -m venv .venv
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
+pip install -r requirements.txt	
+```
+
+------
 
 ## Quickstart
 
-End-to-end flow from a fresh clone. `dataset/` and `outputs/` are gitignored,
-so nothing is shipped — every artifact is produced by one of the three stages.
+End-to-end flow from a fresh clone. `dataset/` and `outputs/` are gitignored, so nothing is shipped — every artifact is produced by one of the three stages.
 
 ### Stage 1 — Data preparation
 
@@ -49,108 +43,81 @@ python -c "from src.config import DATA_PATH; assert DATA_PATH.exists(); print(DA
 # -> .../dataset/dataset_cleaned.csv
 ```
 
-### Stage 2 — Train the (model, objective) grid
+### Stage 2 — Training linear and tree models
 
 ```bash
-# Run any subset of the 17 combos; each takes ~1h with --timeout 3600.
-python -m scripts.run_model --model xgb --objective poisson
-python -m scripts.run_model --model lgb --objective tweedie
-python -m scripts.run_model --model rf  --objective squared_error
-# ... see "Training a single run" below for the full matrix ...
+# Run any subset of the 17 combos; each run --timeout 60 seconds of tuning for quick run
+python -m scripts.run_model --model elastic_net --objective squared_error --timeout 60
+python -m scripts.run_model --model xgb --objective poisson --timeout 60
+python -m scripts.run_model --model lgb --objective tweedie --timeout 60
+python -m scripts.run_model --model rf  --objective squared_error --timeout 60
 ```
 
-### Stage 3 — Champion selection
+*See "Training a single run" below for the full matrix*
+
+### Stage 3 — Bayesian hierarchical model (optional)
+
+Per-cell `(top_brand × flavor_internal × pack_tier)` own-price elasticity with full posterior credible intervals. Runs in parallel with Stage 2 and feeds the same `compare_runs.py` leaderboards.
 
 ```bash
-python -m scripts.compare_runs --metric wmape
+# Quick CV smoke run; required for compare_runs L1/L2 leaderboards (~5-10 min CPU)
+python -m scripts.run_bayesian --cv --draws 200 --warmup 200 --chains 1
+```
+
+See *Training Bayesian hierarchical model* below for all flags, prior choices, and diagnostics.
+
+### Stage 4 — Champion model selection
+
+```bash
+python -m scripts.compare_runs
 # -> outputs/champion_card.json + leaderboards + CD plot
 ```
 
-### Stage 4 — Bayesian hierarchical track (optional)
+### Shortcut — already have trained .joblib files
 
-Per-cell `(top_brand × flavor_internal × pack_tier)` own-price elasticity with
-full posterior credible intervals. Complements the ML track on elasticity
-discipline (100% negative sign, 0% degenerate zeros, 95% HDI).
+If `outputs/` already holds the `.joblib` files from a previous run, skip stages 1–2:
 
 ```bash
-# Quick single-fit on full dev + sealed-test evaluation (~26 min on CPU):
-python -m scripts.run_bayesian --prior moderate --draws 2000 --warmup 1000 --chains 2
-
-# Full CV (|SEEDS| × N_SPLITS = 3 × 3) + final refit, matches GBM leaderboard schema (~3.5-4 h):
-python -m scripts.run_bayesian --prior moderate --draws 2000 --warmup 1000 --chains 2 --cv
-
-# Prior sensitivity sweep (optional, each run is independent):
-python -m scripts.run_bayesian --prior weak   --draws 2000 --warmup 1000 --cv
-python -m scripts.run_bayesian --prior strong --draws 2000 --warmup 1000 --cv
-
-# Re-rank including Bayesian (RMSE scale matches GBM tuning metric):
-python -m scripts.compare_runs --metric rmse
+python -m scripts.compare_runs
 ```
 
-Model structure:
-
-- **Cells** = `(top_brand × flavor_internal × pack_tier)` — the PPA decision unit
-- **Slope hierarchy**: `β_cell = -softplus(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
-  enforcing `β_cell < 0` by construction; `α_flavor` and `α_pack` use
-  `ZeroSumNormal` to remove additive redundancy with `μ_brand`. softplus
-  replaces an earlier `-exp(·)` for bounded jacobian (sigmoid in [0,1]),
-  fixing NUTS step-size adaptation on the hierarchical sigmas.
-- **Intercept hierarchy**: `α_cell` pooled to `μ_alpha_brand`, non-centered
-- **Priors**: `mu_global ~ Normal(1.5, 1)` (moderate) → prior mean elasticity = `-softplus(1.5) ≈ -1.70`
-- **Controls**: promotion, sin/cos seasonality, customer dummies
-- **Inference**: NUTS with 2 parallel chains (`numpyro.set_host_device_count(2)`
-  at script top), `target_accept_prob=0.9`
-
-Diagnostics printed after each fit: `rhat_max`, `ess_bulk_min`, `divergences`.
-Targets: `rhat < 1.01`, `divergences = 0`, `ess_bulk > 400`.
-
-### Shortcut — already have trained joblibs
-
-If `outputs/` already holds the joblibs from a previous run, skip stages 1–2:
-
-```bash
-python -m scripts.compare_runs --metric wmape
-```
-
-## Installation
-
-```bash
-python -m venv .venv
-source .venv/bin/activate              # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Tested on Python 3.12. Key dependencies:
-
-- `xgboost>=3.0`, `lightgbm>=4.6`, `scikit-learn>=1.7`
-- `optuna>=4.2`, `scikit-posthocs>=0.12`
-- `numpyro>=0.18`, `jax>=0.7,<0.10`, `jaxlib>=0.7,<0.10`, `arviz>=0.21` (Bayesian track core)
-- `h5netcdf>=1.3`, `h5py>=3.10` (required to persist Bayesian `.nc` posterior)
-- `shap>=0.47` (feature selection)
+------
 
 ## Data
 
-- Input CSV path is configured at [src/config.py:5](src/config.py#L5); default is
-  `dataset/dataset_cleaned.csv`. The cleaning notebook
-  [notebooks/01_data_preparation.ipynb](notebooks/01_data_preparation.ipynb)
-  produces this file from `dataset/original-dataset.csv`. The whole `dataset/`
-  directory is gitignored.
-- Required raw columns: `yearweek`, `product_sku_code`, `customer`,
-  `nielsen_total_volume`, `price_per_item`, `pack_size_internal`,
-  `units_per_package_internal`, `top_brand`, `flavor_internal`,
-  `pack_type_internal`, `pack_tier`.
-- Row-wise, cold-start-safe features are derived in [src/features.py](src/features.py):
-  `price_per_litre`, `log_price_per_litre`, `week_sin`, `week_cos`,
-  `continuous_week`, `pack_size_total`, `volume_in_litres`,
-  `log_volume_in_litres` (training target).
-- Splitting (see [src/split.py](src/split.py)): the sealed test set is the last
-  `TEST_WEEK_RATIO = 20%` of unique weeks. The dev set is partitioned into
-  `N_SPLITS + 1 = 4` blocks, yielding 3 expanding-window CV folds.
+- Input CSV path is configured at [src/config.py:5](src/config.py#L5); default is `dataset/dataset_cleaned.csv`. The cleaning notebook
+  [notebooks/01_data_preparation.ipynb](notebooks/01_data_preparation.ipynb) produces this file from `dataset/original-dataset.csv`. The whole `dataset/` directory is gitignored.
+- Required raw columns: 
+  - `yearweek`,
+  - `product_sku_code`,
+  - `customer`,
+  - `nielsen_total_volume`,
+  - `price_per_item`,
+  - `pack_size_internal`,
+  - `units_per_package_internal`,
+  - `top_brand`,
+  - `flavor_internal`,
+  - `pack_type_internal`,
+  - `pack_tier`.
+
+- Row-wise, cold-start-safe features are derived in [src/features.py](src/features.py): 
+  - `price_per_litre`,
+  - `log_price_per_litre`, 
+  - `week_sin`, 
+  - `week_cos`, 
+  - `continuous_week`, 
+  - `pack_size_total`, 
+  - `volume_in_litres`, 
+  - `log_volume_in_litres` (training target).
+
+- Splitting (see [src/split.py](src/split.py)): the sealed test set is the last `TEST_WEEK_RATIO = 20%` of unique weeks. The dev set is partitioned into `N_SPLITS + 1 = 4` blocks, yielding 3 expanding-window CV folds.
+
+------
 
 ## Project structure
 
 ```
-PPAtraining/
+ppa-ml/
 ├── requirements.txt
 ├── dataset/                           # input data (gitignored)
 │   ├── original-dataset.csv           # raw source
@@ -187,170 +154,254 @@ PPAtraining/
 
 Produced artifacts live under `outputs/`.
 
-## Training a single run
+------
 
-```
-python -m scripts.run_model --model {elastic_net|hgb|xgb|lgb|rf} --objective {squared_error|poisson|tweedie|gamma} [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
+## Training a single model
+
+This sections explains the command needed to run a single model (excludeBayesian hierarchical model):
+
+```bash
+python -m scripts.run_model --model {elastic_net|hgb|xgb|lgb|rf} [options]
 ```
 
-Per-model objective support, enforced at [scripts/run_model.py:70-78](scripts/run_model.py#L70):
+### Arguments
+
+| Flag                  | Default         | Meaning                                                      |
+| --------------------- | --------------- | ------------------------------------------------------------ |
+| `--model`             | *(required)*    | Model family. One of `elastic_net`, `hgb`, `xgb`, `lgb`, `rf`. |
+| `--objective`         | `squared_error` | Training loss. `squared_error` / `poisson` / `tweedie` / `gamma`. Per-model support enforced after parse — see matrix below. |
+| `--metric`            | `rmse`          | Metric Optuna minimizes during tuning. One of `rmse`, `rmse_log`, `rmsle`, `r2`, `r2_log`, `mape`, `smape`, `wmape`, `mae`, `mae_log`. (`r2`/`r2_log` are negated internally.) |
+| `--timeout`           | `3600`          | Optuna wall-clock budget in seconds. Tuning stops at whichever comes first: this, or `--max-trials`. |
+| `--max-trials`        | `1000`          | Hard cap on Optuna trials. Wall-clock usually triggers first. |
+| `--seeds`             | `42 123 456`    | Random seeds for the refit-across-seeds step. `len(seeds) × n_folds` rows in `metrics_<run>.csv`. |
+| `--skip-tune`         | off             | Skip Optuna; refit with default hyperparameters. Useful for smoke tests. |
+| `--reselect-features` | off             | Force BorutaShap to re-run; overwrites `outputs/feature_cols_<model>.json`. Use after changing `CANDIDATE_FEATURES` / `CATEGORICAL_COLS`. |
+| `--output-suffix`     | `""`            | Extra string appended to all output filenames, e.g. `--output-suffix _v2` → `metrics_xgb_squared_error_v2.csv`. |
+
+### Per-model objective support
+
+Enforced at [scripts/run_model.py:73-79](vscode-webview://1e7fvceui6j5qc811gg6auo01adf8no69cuved71om5r9f6q48q1/scripts/run_model.py#L73-L79).
 
 | model         | squared_error | poisson | tweedie | gamma |
-|---------------|:-------------:|:-------:|:-------:|:-----:|
-| elastic_net   | yes           | yes     | yes     | yes   |
-| hgb           | yes           | yes     |         | yes   |
-| xgb           | yes           | yes     | yes     | yes   |
-| lgb           | yes           | yes     | yes     | yes   |
-| rf            | yes           | yes     |         |       |
+| ------------- | :-----------: | :-----: | :-----: | :---: |
+| `elastic_net` |      yes      |   yes   |   yes   |  yes  |
+| `hgb`         |      yes      |   yes   |   no    |  yes  |
+| `xgb`         |      yes      |   yes   |   yes   |  yes  |
+| `lgb`         |      yes      |   yes   |   yes   |  yes  |
+| `rf`          |      yes      |   yes   |   no    |  no   |
 
-> **Caveat on the `elastic_net` row.** Only `--objective squared_error` is
-> true ElasticNet (L1+L2 OLS on log-y). The `poisson` / `tweedie` / `gamma`
-> variants swap the underlying estimator to sklearn's `PoissonRegressor` /
-> `TweedieRegressor(power=1.5)` / `GammaRegressor` — log-link GLMs with **L2
-> penalty only** (no L1). They share `ElasticNetModel` as a dispatch shell
-> ([src/models/elastic_net.py:63-78](src/models/elastic_net.py#L63-L78)) but
-> are distinct model families. `hgb`, `xgb`, `lgb`, `rf` keep the same estimator
-> across objectives — only the loss function (`criterion` / `objective` / `loss`)
-> changes. `rf` is the most restricted: sklearn `RandomForestRegressor.criterion`
-> only supports `squared_error` and `poisson`, so `tweedie` / `gamma` are not
-> available for `rf`.
+**17 valid combinations.** Note: only `elastic_net --objective squared_error` is true ElasticNet (L1+L2). The other three `elastic_net` objectives swap to sklearn's `PoissonRegressor` / `TweedieRegressor(power=1.5)` / `GammaRegressor` — log-link GLMs with **L2 only**. `hgb`/`xgb`/`lgb`/`rf` keep the same estimator across objectives; only the loss changes. `rf` is most restricted because sklearn `RandomForestRegressor.criterion` only supports `squared_error` and `poisson`.
 
-That is 17 valid combinations. Each run takes roughly one hour (`--timeout`
-defaults to `TUNING_WALLCLOCK_SEC = 3600`). Optuna persists trials in
-`outputs/optuna.db` with `load_if_exists=True`, so re-invoking the same
-`(model, objective, metric, seed)` continues the existing study rather than
-starting over.
+### Resuming tuning
+
+Optuna persists trials in `outputs/optuna.db` with `load_if_exists=True`. Re-invoking the same `(model, objective, metric, seed)` continues the existing study instead of restarting.
 
 ### Feature-selection cache
 
-Feature selection is **objective-agnostic** — `pick_features` always trains
-the BorutaShap surrogate against `log_volume_in_litres` regardless of
-`--objective`, so all 4 objectives of e.g. `xgb` produce identical
-`feature_cols`. The first run for a given model_type runs BorutaShap and
-writes the selection to `outputs/feature_cols_<model_type>.json`. Subsequent
-runs of the **same model_type** (any objective) load the cache and skip
-BorutaShap — typically saves ~5-8 min per run.
+BorutaShap is **objective-agnostic** — it always trains its surrogate against `log_volume_in_litres` regardless of `--objective`, so all 4 objectives of e.g. `xgb` produce identical `feature_cols`. The first run for a given `--model` writes `outputs/feature_cols_<model>.json`; subsequent runs (any objective) reuse the cache, saving ~5–8 min.
 
 ```bash
-python -m scripts.run_model --model xgb --objective squared_error  # writes outputs/feature_cols_xgb.json
-python -m scripts.run_model --model xgb --objective poisson        # uses cache, skips BorutaShap
-python -m scripts.run_model --model xgb --objective tweedie        # uses cache, skips BorutaShap
-python -m scripts.run_model --model xgb --reselect-features        # force re-run, overwrites cache
+python -m scripts.run_model --model xgb --objective squared_error  # writes the cache
+python -m scripts.run_model --model xgb --objective poisson        # reuses the cache
+python -m scripts.run_model --model xgb --reselect-features        # forces re-run
 ```
 
-Stale-cache safety: if a cached feature is no longer present in `df_dev.columns`
-(e.g. you removed a categorical from `CATEGORICAL_COLS`), the runner detects
-this and re-selects automatically. Manually `rm outputs/feature_cols_<model>.json`
-is equivalent to `--reselect-features` for one model.
+If a cached feature is missing from `df_dev.columns`, the runner detects it and re-selects automatically. `rm outputs/feature_cols_<model>.json` is equivalent to `--reselect-features`.
 
-Each run writes five files to `outputs/`:
+### Outputs
 
-| file                          | contents                                               |
-|-------------------------------|--------------------------------------------------------|
-| `metrics_<run>.csv`           | CV metrics, `n_seeds × n_folds` rows                   |
-| `test_metrics_<run>.json`     | single-row sealed 2025H2 metrics                       |
-| `elasticity_<run>.csv`        | per-SKU β (`beta_mean`, `beta_lo`, `beta_hi`, …)       |
-| `metadata_<run>.json`         | objective, `feature_cols`, `best_params`, versions     |
-| `model_<run>.joblib`          | exported champion (see "Downstream consumption")       |
+Each run writes five files to `outputs/`, all suffixed with `<run> = <model>_<objective>` (e.g. `lgb_poisson`):
 
-Naming convention: `<run> = <model_type>_<objective>` for every run
-(e.g. `xgb_squared_error`, `lgb_poisson`, `xgb_tweedie`, `rf_squared_error`).
+| file                      | contents                                                 |
+| ------------------------- | -------------------------------------------------------- |
+| `metrics_<run>.csv`       | CV metrics, `n_seeds × n_folds` rows                     |
+| `test_metrics_<run>.json` | sealed-test metrics, single row                          |
+| `elasticity_<run>.csv`    | per-SKU β: `beta_mean`, `beta_lo`, `beta_hi`, `beta_std` |
+| `metadata_<run>.json`     | objective, `feature_cols`, `best_params`, versions       |
+| `model_<run>.joblib`      | exported champion (see "Downstream consumption")         |
 
-Bayesian runs (`scripts/run_bayesian.py`) write a different set under
-`outputs/` keyed by `<prior> ∈ {weak, moderate, strong}`:
+## Training Bayesian hierarchical model
 
-| file                                          | contents                                                    |
-|-----------------------------------------------|-------------------------------------------------------------|
-| `metrics_hier_bayes_<prior>.csv`              | CV metrics, `|SEEDS| × N_SPLITS` rows (only with `--cv`)    |
-| `test_metrics_hier_bayes_<prior>.json`        | single-row sealed-test metrics                              |
-| `elasticity_hier_bayes_<prior>.csv`           | per-SKU β broadcast from per-cell posterior                 |
-| `elasticity_cells_hier_bayes_<prior>.csv`     | per-cell β: `beta_mean`, `beta_median`, `beta_hdi_{lo,hi}`  |
-| `convergence_hier_bayes_<prior>.csv`          | `arviz.summary` of all hyperparameters (R-hat / ESS)        |
-| `metadata_hier_bayes_<prior>.json`            | prior config, code maps, sampler versions                   |
-| `model_hier_bayes_<prior>.nc`                 | full `arviz.InferenceData` (posterior + sample_stats)       |
+This section explains the command needed to run the Bayesian hierarchical track. Per-cell `(top_brand × flavor_internal × pack_tier)` own-price elasticity with full posterior credible intervals; runs in parallel with the ML track and feeds the same `compare_runs.py` leaderboards.
 
-These feed into the same `compare_runs.py` leaderboards as GBM runs.
+```bash
+python -m scripts.run_bayesian [options]
+```
+
+### Arguments
+
+| Flag        | Default      | Meaning                                                      |
+| ----------- | ------------ | ------------------------------------------------------------ |
+| `--prior`   | `moderate`   | Prior strength on global elasticity. One of `weak` / `moderate` / `strong` — see table below. |
+| `--draws`   | `2000`       | Posterior samples per chain after warmup.                    |
+| `--warmup`  | `1000`       | NUTS warmup (burn-in) iterations per chain. Step-size and mass-matrix adaptation only — these draws are discarded. |
+| `--chains`  | `2`          | Number of MCMC chains. Run truly in parallel via `numpyro.set_host_device_count(2)` set at script top. |
+| `--fold`    | `-1`         | Which expanding-window CV fold to use as the train slice. `-1` = use all dev rows (eval on sealed test); `0` / `1` / `2` = use that fold's train slice (eval on the fold's val slice). |
+| `--cv`      | off          | Run `\|SEEDS\| × N_SPLITS = 3 × 3 = 9` MCMC fits, write `metrics_hier_bayes_<prior>.csv` matching the GBM CV schema. The single final refit on full dev still runs afterward. |
+
+### Prior choices
+
+Read from `PRIOR_CONFIGS` at [src/models/hier_bayes.py:41-45](src/models/hier_bayes.py#L41-L45). Prior-mean elasticity = `-softplus(mu_loc)`.
+
+| `--prior`              | `mu_global`      | sigma scale      | Prior-mean elasticity                          |
+| ---------------------- | ---------------- | ---------------- | ---------------------------------------------- |
+| `weak`                 | `Normal(0, 5)`   | inflated (×2)    | wide, basically uninformative                  |
+| `moderate` *(default)* | `Normal(1.5, 1)` | nominal          | `-softplus(1.5) ≈ -1.70` (matches beverage-category literature) |
+| `strong`               | `Normal(1.5, 0.5)` | shrunk (×0.5)  | tight around -1.70                             |
+
+### Convergence diagnostics
+
+Printed after each fit and saved to `convergence_hier_bayes_<prior>.csv` plus the `convergence` block of `metadata_hier_bayes_<prior>.json`:
+
+- `rhat_max` — target `< 1.01`
+- `ess_bulk_min` — target `> 400`
+- `divergences` — target `= 0`
+
+A posterior predictive check is also written to `ppc_summary_hier_bayes_<prior>.json` with `pass_mean` (`|obs.mean − ppc.mean| < 0.05`) and `pass_std` (`|obs.std − ppc.std| < 0.10`).
+
+### Examples
+
+```bash
+# Default: single fit on full dev + sealed-test eval (~26 min CPU)
+python -m scripts.run_bayesian
+
+# Full CV — required for compare_runs L1/L2 leaderboards (~3.5-4 h)
+python -m scripts.run_bayesian --cv
+
+# Prior sensitivity sweep (each run is independent)
+python -m scripts.run_bayesian --prior weak   --cv
+python -m scripts.run_bayesian --prior strong --cv
+```
+
+### Outputs
+
+Bayesian runs (`scripts/run_bayesian.py`) write a parallel set keyed by `<prior> ∈ {weak, moderate, strong}`:
+
+| file                                      | contents                                                   |
+| ----------------------------------------- | ---------------------------------------------------------- |
+| `metrics_hier_bayes_<prior>.csv`          | CV metrics, `|SEEDS| × N_SPLITS` rows (only with `--cv`)   |
+| `test_metrics_hier_bayes_<prior>.json`    | sealed-test metrics, single row                            |
+| `elasticity_hier_bayes_<prior>.csv`       | per-SKU β broadcast from per-cell posterior                |
+| `elasticity_cells_hier_bayes_<prior>.csv` | per-cell β: `beta_mean`, `beta_median`, `beta_hdi_{lo,hi}` |
+| `convergence_hier_bayes_<prior>.csv`      | `arviz.summary` of all hyperparameters (R-hat / ESS)       |
+| `metadata_hier_bayes_<prior>.json`        | prior config, code maps, sampler versions                  |
+| `model_hier_bayes_<prior>.nc`             | full `arviz.InferenceData`                                 |
+
+Both sets feed into `compare_runs.py`.
+
+------
 
 ## Champion selection (4 layers)
 
+This section explains the command needed to rank every run produced by `run_model.py` / `run_bayesian.py` and pick the champion. The script reads `outputs/metrics_*.csv`, `outputs/test_metrics_*.json`, and `outputs/elasticity_*.csv`, then runs four layers of evidence.
+
 ```bash
-python -m scripts.compare_runs --metric wmape [--top-k 5] [--outputs-dir outputs]
+python -m scripts.compare_runs [options]
 ```
 
+### Arguments
+
+| Flag            | Default     | Meaning                                                      |
+| --------------- | ----------- | ------------------------------------------------------------ |
+| `--metric`      | `wmape`     | Primary ranking metric (raw-volume scale). Must exist in `metrics_<run>.csv` and `test_metrics_<run>.json`. Common choices: `wmape`, `rmse`, `rmsle`, `mae`. |
+| `--top-k`       | `5`         | A run must rank within top-k on **both** the CV leaderboard (L1) and the sealed-test leaderboard (L3) to pass those gates. |
+| `--outputs-dir` | `outputs`   | Directory to read run artifacts from and write leaderboards / champion card to. |
+
+### The 4 layers
+
 | Layer | Question                            | Method                                      | Artifact                                            |
-|-------|-------------------------------------|---------------------------------------------|-----------------------------------------------------|
+| ----- | ----------------------------------- | ------------------------------------------- | --------------------------------------------------- |
 | L1    | Who is most accurate on average?    | mean + CI95 over `n_seeds × n_folds`        | `leaderboard_cv.csv`                                |
-| L2    | Are the differences significant?    | Friedman + Nemenyi (fallback: Wilcoxon)     | `friedman.json`, `nemenyi.csv`, `cd_plot.png`       |
+| L2    | Are the differences significant?    | Friedman + Nemenyi (fallback: Wilcoxon)     | `friedman.json`, `nemenyi.csv`, `cd_plot.png`, `wilcoxon.csv` |
 | L3    | Do rankings generalise to unseen?   | sealed-test rank + Spearman ρ(CV, sealed)   | `leaderboard_sealed.csv`                            |
 | L4    | Did the model learn the right sign? | `sign_test_pass_nonzero` + magnitude test   | `elasticity_scorecard.csv`                          |
 
-A run becomes champion iff it passes **all four gates**:
+### Champion gates
 
-1. CV rank within top-k on `--metric`
-2. Nemenyi (or Wilcoxon fallback) `p < 0.05` versus `seasonal_naive`
-3. Sealed-test rank within top-k
-4. Among non-zero β, `share_negative ≥ 95%` AND `share_in [-3.5, -0.5] > 50%`
+A run becomes champion **iff it passes all four gates** (baselines are excluded from eligibility):
 
-If any gate fails, the script prints the top candidates ranked by
-`gates_passed` and the blocking gate, and skips writing `champion_card.json`.
+| Gate         | Pass condition                                                                                  |
+| ------------ | ----------------------------------------------------------------------------------------------- |
+| `gate_cv`    | `cv_rank ≤ --top-k`                                                                             |
+| `gate_sig`   | `p_value < 0.05` vs `seasonal_naive` (Nemenyi if available, else Wilcoxon)                      |
+| `gate_sealed`| `sealed_rank ≤ --top-k`                                                                         |
+| `gate_elast` | `sign_test_pass_nonzero == True` (≥95% of non-zero β are negative) **AND** `share_in_soft_drink_range > 0.5` (>50% of β lie in `[-3.5, -0.5]`) |
+
+If any gate fails, the script prints the top candidates ranked by `gates_passed` and the blocking gate, and skips writing `champion_card.json`. Tiebreaker among gate-passers: lowest CV `--metric`.
+
+### Outputs
+
+Written to `--outputs-dir` (default `outputs/`):
+
+| file                        | contents                                                       |
+| --------------------------- | -------------------------------------------------------------- |
+| `leaderboard_cv.csv`        | L1 — mean / std / CI95 + rank on `--metric`                    |
+| `friedman.json`             | L2 — Friedman χ² and p-value across all runs                   |
+| `nemenyi.csv`               | L2 — pairwise Nemenyi p-value matrix (if `scikit-posthocs` installed) |
+| `wilcoxon.csv`              | L2 — pairwise Wilcoxon p-values (always written)               |
+| `cd_plot.png`               | L2 — critical-difference diagram                               |
+| `leaderboard_sealed.csv`    | L3 — sealed-test metric + rank                                 |
+| `elasticity_scorecard.csv`  | L4 — sign / magnitude diagnostics per run                      |
+| `composite.csv`             | Per-run join of all 4 layers + per-gate booleans               |
+| `champion_card.json`        | Final champion summary (only written if a run passes all gates) |
+
+------
 
 ## Reproducing the current champion
 
-The current shipped champion is `lgb_poisson`
-(CV WMAPE 0.232, sealed WMAPE 0.281, 99% negative β, median β ≈ -1.06).
+The current shipped champion is `lgb_poisson` (CV WMAPE 0.232, sealed WMAPE 0.281, 99% negative β, median β ≈ -1.06).
 
-**Path A — reuse existing joblibs (seconds).** The joblibs already in
-`outputs/` are the source of truth; only the elasticity extractor has changed.
+**Path A — reuse existing joblibs (seconds).** Re-extract elasticity from the existing joblibs and re-rank.
 
 ```bash
-python -m scripts.reextract_elasticity       # re-runs tree_local_elasticity on all 13 tree joblibs
+python -m scripts.reextract_elasticity       # re-runs tree_local_elasticity on all tree joblibs
 python -m scripts.compare_runs --metric wmape
 ```
 
-**Path B — retrain from scratch (~17 hours).**
+**Path B — retrain from scratch (~20 hours).** Iterate over every valid `(model, objective)` combination from the matrix above, then re-rank.
 
 ```bash
 rm -f outputs/optuna.db                       # or leave it to resume studies
 
-python -m scripts.run_model --model elastic_net
+# Run each of the 17 valid combinations:
+python -m scripts.run_model --model elastic_net --objective squared_error
 python -m scripts.run_model --model elastic_net --objective poisson
 python -m scripts.run_model --model elastic_net --objective tweedie
 python -m scripts.run_model --model elastic_net --objective gamma
-python -m scripts.run_model --model hgb
+
+python -m scripts.run_model --model hgb --objective squared_error
 python -m scripts.run_model --model hgb --objective poisson
 python -m scripts.run_model --model hgb --objective gamma
-python -m scripts.run_model --model xgb
+
+python -m scripts.run_model --model xgb --objective squared_error
 python -m scripts.run_model --model xgb --objective poisson
 python -m scripts.run_model --model xgb --objective tweedie
 python -m scripts.run_model --model xgb --objective gamma
-python -m scripts.run_model --model lgb
+
+python -m scripts.run_model --model lgb --objective squared_error
 python -m scripts.run_model --model lgb --objective poisson
 python -m scripts.run_model --model lgb --objective tweedie
 python -m scripts.run_model --model lgb --objective gamma
-python -m scripts.run_model --model rf
+
+
+python -m scripts.run_model --model rf --objective squared_error
 python -m scripts.run_model --model rf --objective poisson
 
-python -m scripts.compare_runs --metric wmape
+python -m scripts.run_bayesian --cv
+
+python -m scripts.compare_runs
 ```
 
-`run_model.py` re-extracts elasticity as step 6 of every run, so after
-Path B `reextract_elasticity` is redundant.
+`run_model.py` re-extracts elasticity as step 6 of every run, so after Path B `reextract_elasticity` is redundant.
 
 ## Downstream consumption
 
-Every `outputs/model_<run>.joblib` is a self-contained sklearn object. The
-export contract (see [src/models/export.py](src/models/export.py)) is:
+Every `outputs/model_<run>.joblib` is a self-contained sklearn object. The export contract (see [src/models/export.py](src/models/export.py)) is:
 
-- **log-y objective** (`squared_error` on ElasticNet / HGB / XGB / LGB / RF) —
-  the inner `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
-  inverse_func=expm1)` and refit on raw volume.
-- **raw-y objective** (`poisson` / `tweedie` / `gamma`) — the inner
-  `Pipeline` is refit directly on raw volume; no TTR wrapper.
+- **log-y objective** (`squared_error` on ElasticNet / HGB / XGB / LGB / RF) — the inner `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p, inverse_func=expm1)` and refit on raw volume.
+- **raw-y objective** (`poisson` / `tweedie` / `gamma`) — the inner `Pipeline` is refit directly on raw volume; no TTR wrapper.
 
-In both cases `joblib.load(path).predict(df)` returns raw `volume_in_litres`.
-To convert back to packs (when a downstream report needs pack counts), divide
-by `units_per_package_internal * pack_size_internal / 1000`. Consuming the
-champion from another process:
+In both cases `joblib.load(path).predict(df)` returns raw `volume_in_litres`. To convert back to packs (when a downstream report needs pack counts), divide by `units_per_package_internal * pack_size_internal / 1000`. Consuming the champion from another process:
 
 ```python
 import joblib
@@ -362,5 +413,6 @@ df_engineered = build_features(pd.read_csv("new_data.csv"))
 litres_pred = model.predict(df_engineered)   # raw volume_in_litres
 ```
 
-The exact columns the model expects are listed under `feature_cols` in
-`outputs/metadata_<run>.json`.
+The exact columns the model expects are listed under `feature_cols` in `outputs/metadata_<run>.json`.
+
+> **Bayesian track is not joblib-compatible.** `scripts/run_bayesian.py` writes `outputs/model_hier_bayes_<prior>.nc` — an `arviz.InferenceData` netCDF, not a sklearn pickle. There is no `.predict()` on the `.nc` file directly. For posterior summaries load it with `arviz.from_netcdf(...)`; for new predictions reconstruct a `BayesianHierModel` and feed it the saved posterior. Use `outputs/elasticity_hier_bayes_<prior>.csv` (per-SKU β with HDI) if you only need elasticity numbers.

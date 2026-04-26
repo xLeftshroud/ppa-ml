@@ -296,6 +296,7 @@ def main() -> None:
     print("[C] Composite + champion selection ...")
     comp = composite(cv, sealed, elast, sig, args.metric, args.top_k)
     comp.to_csv(outputs_dir / "composite.csv")
+    print(f"    saved {outputs_dir / 'composite.csv'}")
 
     print("\n" + "=" * 80)
     print(f"  COMPOSITE TABLE (sorted by CV {args.metric}, top {min(args.top_k*3, len(comp))}):")
