@@ -4,11 +4,12 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
 
 ## What it does
 
-1. Trains a grid of up to **15 `(model × objective)` combinations** across four
-   ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM —
-   each with industry-standard regression losses (`squared_error` / `poisson`
-   / `tweedie` / `gamma`). Tree models enforce a monotone constraint
-   `∂E[volume] / ∂price ≤ 0` on `price_per_litre`.
+1. Trains a grid of up to **17 `(model × objective)` combinations** across five
+   ML families — ElasticNet, HistGradientBoosting (`hgb`), XGBoost, LightGBM,
+   RandomForest (`rf`) — each with industry-standard regression losses
+   (`squared_error` / `poisson` / `tweedie` / `gamma`). Tree models enforce a
+   monotone constraint `∂E[volume] / ∂price ≤ 0` on `price_per_litre`. RF acts
+   as a bagging-based sanity check alongside the three boosters.
 2. Tunes each combination with **Optuna TPE + fold-level MedianPruner** under a
    one-hour wall-clock budget, validates on expanding-window CV over
    `continuous_week`, then evaluates once on a sealed 2025H2 holdout.
@@ -17,7 +18,7 @@ Price-Pack-Architecture demand forecasting with per-SKU own-price elasticity for
    elasticity plausibility.
 4. Optionally runs a **Bayesian hierarchical track** (`scripts/run_bayesian.py`)
    with non-centered brand-nested + flavor/pack crossed random effects,
-   hard sign constraint `β < 0` via `-exp(·)`, and `ZeroSumNormal` priors on
+   hard sign constraint `β < 0` via `-softplus(·)`, and `ZeroSumNormal` priors on
    crossed effects. Emits per-cell `(top_brand × flavor_internal × pack_tier)`
    elasticity with 95% HDI and full R-hat / ESS / divergence diagnostics.
 
@@ -51,9 +52,10 @@ python -c "from src.config import DATA_PATH; assert DATA_PATH.exists(); print(DA
 ### Stage 2 — Train the (model, objective) grid
 
 ```bash
-# Run any subset of the 15 combos; each takes ~1h with --timeout 3600.
+# Run any subset of the 17 combos; each takes ~1h with --timeout 3600.
 python -m scripts.run_model --model xgb --objective poisson
 python -m scripts.run_model --model lgb --objective tweedie
+python -m scripts.run_model --model rf  --objective squared_error
 # ... see "Training a single run" below for the full matrix ...
 ```
 
@@ -88,11 +90,13 @@ python -m scripts.compare_runs --metric rmse
 Model structure:
 
 - **Cells** = `(top_brand × flavor_internal × pack_tier)` — the PPA decision unit
-- **Slope hierarchy**: `β_cell = -exp(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
+- **Slope hierarchy**: `β_cell = -softplus(μ_brand[b] + α_flavor[f] + α_pack[p] + ε_cell)`,
   enforcing `β_cell < 0` by construction; `α_flavor` and `α_pack` use
-  `ZeroSumNormal` to remove additive redundancy with `μ_brand`
+  `ZeroSumNormal` to remove additive redundancy with `μ_brand`. softplus
+  replaces an earlier `-exp(·)` for bounded jacobian (sigmoid in [0,1]),
+  fixing NUTS step-size adaptation on the hierarchical sigmas.
 - **Intercept hierarchy**: `α_cell` pooled to `μ_alpha_brand`, non-centered
-- **Priors**: `mu_global ~ Normal(0.5, 1)` (moderate) → prior mean elasticity ≈ `-1.65`
+- **Priors**: `mu_global ~ Normal(1.5, 1)` (moderate) → prior mean elasticity = `-softplus(1.5) ≈ -1.70`
 - **Controls**: promotion, sin/cos seasonality, customer dummies
 - **Inference**: NUTS with 2 parallel chains (`numpyro.set_host_device_count(2)`
   at script top), `target_accept_prob=0.9`
@@ -155,7 +159,7 @@ PPAtraining/
 │   ├── 01_data_preparation.ipynb      # raw -> cleaned
 │   └── 02_eda.ipynb                   # exploratory analysis
 ├── scripts/
-│   ├── run_model.py                   # training entry for the 4 ML families
+│   ├── run_model.py                   # training entry for the 5 ML families
 │   ├── run_bayesian.py                # hierarchical Bayes track
 │   ├── reextract_elasticity.py        # refresh SKU-β from joblibs (no retrain)
 │   └── compare_runs.py                # 4-layer comparison + champion pick
@@ -175,6 +179,7 @@ PPAtraining/
         ├── hgb.py                     # HistGradientBoostingRegressor
         ├── xgb.py                     # XGBoost, monotone_constraints on price
         ├── lgb.py                     # LightGBM, monotone_constraints on price
+        ├── rf.py                      # RandomForest (bagging), monotonic_cst on price
         ├── hier_bayes.py              # numpyro hierarchical model
         ├── preprocess.py              # OneHot + TargetEncoder dispatch
         └── export.py                  # joblib export (raw-volume contract)
@@ -185,10 +190,10 @@ Produced artifacts live under `outputs/`.
 ## Training a single run
 
 ```
-python -m scripts.run_model --model {elastic_net|hgb|xgb|lgb} --objective {squared_error|poisson|tweedie|gamma} [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
+python -m scripts.run_model --model {elastic_net|hgb|xgb|lgb|rf} --objective {squared_error|poisson|tweedie|gamma} [--metric wmape] [--timeout 3600] [--seeds 42 123 456]
 ```
 
-Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/run_model.py#L68):
+Per-model objective support, enforced at [scripts/run_model.py:70-78](scripts/run_model.py#L70):
 
 | model         | squared_error | poisson | tweedie | gamma |
 |---------------|:-------------:|:-------:|:-------:|:-----:|
@@ -196,6 +201,7 @@ Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/ru
 | hgb           | yes           | yes     |         | yes   |
 | xgb           | yes           | yes     | yes     | yes   |
 | lgb           | yes           | yes     | yes     | yes   |
+| rf            | yes           | yes     |         |       |
 
 > **Caveat on the `elastic_net` row.** Only `--objective squared_error` is
 > true ElasticNet (L1+L2 OLS on log-y). The `poisson` / `tweedie` / `gamma`
@@ -203,14 +209,39 @@ Per-model objective support, enforced at [scripts/run_model.py:68-74](scripts/ru
 > `TweedieRegressor(power=1.5)` / `GammaRegressor` — log-link GLMs with **L2
 > penalty only** (no L1). They share `ElasticNetModel` as a dispatch shell
 > ([src/models/elastic_net.py:63-78](src/models/elastic_net.py#L63-L78)) but
-> are distinct model families. `hgb`, `xgb`, `lgb` keep the same estimator
-> across objectives — only the loss function changes.
+> are distinct model families. `hgb`, `xgb`, `lgb`, `rf` keep the same estimator
+> across objectives — only the loss function (`criterion` / `objective` / `loss`)
+> changes. `rf` is the most restricted: sklearn `RandomForestRegressor.criterion`
+> only supports `squared_error` and `poisson`, so `tweedie` / `gamma` are not
+> available for `rf`.
 
-That is 15 valid combinations. Each run takes roughly one hour (`--timeout`
+That is 17 valid combinations. Each run takes roughly one hour (`--timeout`
 defaults to `TUNING_WALLCLOCK_SEC = 3600`). Optuna persists trials in
 `outputs/optuna.db` with `load_if_exists=True`, so re-invoking the same
 `(model, objective, metric, seed)` continues the existing study rather than
 starting over.
+
+### Feature-selection cache
+
+Feature selection is **objective-agnostic** — `pick_features` always trains
+the BorutaShap surrogate against `log_volume_in_litres` regardless of
+`--objective`, so all 4 objectives of e.g. `xgb` produce identical
+`feature_cols`. The first run for a given model_type runs BorutaShap and
+writes the selection to `outputs/feature_cols_<model_type>.json`. Subsequent
+runs of the **same model_type** (any objective) load the cache and skip
+BorutaShap — typically saves ~5-8 min per run.
+
+```bash
+python -m scripts.run_model --model xgb --objective squared_error  # writes outputs/feature_cols_xgb.json
+python -m scripts.run_model --model xgb --objective poisson        # uses cache, skips BorutaShap
+python -m scripts.run_model --model xgb --objective tweedie        # uses cache, skips BorutaShap
+python -m scripts.run_model --model xgb --reselect-features        # force re-run, overwrites cache
+```
+
+Stale-cache safety: if a cached feature is no longer present in `df_dev.columns`
+(e.g. you removed a categorical from `CATEGORICAL_COLS`), the runner detects
+this and re-selects automatically. Manually `rm outputs/feature_cols_<model>.json`
+is equivalent to `--reselect-features` for one model.
 
 Each run writes five files to `outputs/`:
 
@@ -223,7 +254,7 @@ Each run writes five files to `outputs/`:
 | `model_<run>.joblib`          | exported champion (see "Downstream consumption")       |
 
 Naming convention: `<run> = <model_type>_<objective>` for every run
-(e.g. `xgb_squared_error`, `lgb_poisson`, `xgb_tweedie`).
+(e.g. `xgb_squared_error`, `lgb_poisson`, `xgb_tweedie`, `rf_squared_error`).
 
 Bayesian runs (`scripts/run_bayesian.py`) write a different set under
 `outputs/` keyed by `<prior> ∈ {weak, moderate, strong}`:
@@ -272,11 +303,11 @@ The current shipped champion is `lgb_poisson`
 `outputs/` are the source of truth; only the elasticity extractor has changed.
 
 ```bash
-python -m scripts.reextract_elasticity       # re-runs tree_local_elasticity on all 12 tree joblibs
+python -m scripts.reextract_elasticity       # re-runs tree_local_elasticity on all 13 tree joblibs
 python -m scripts.compare_runs --metric wmape
 ```
 
-**Path B — retrain from scratch (~16 hours).**
+**Path B — retrain from scratch (~17 hours).**
 
 ```bash
 rm -f outputs/optuna.db                       # or leave it to resume studies
@@ -296,6 +327,8 @@ python -m scripts.run_model --model lgb
 python -m scripts.run_model --model lgb --objective poisson
 python -m scripts.run_model --model lgb --objective tweedie
 python -m scripts.run_model --model lgb --objective gamma
+python -m scripts.run_model --model rf
+python -m scripts.run_model --model rf --objective poisson
 
 python -m scripts.compare_runs --metric wmape
 ```
@@ -308,8 +341,8 @@ Path B `reextract_elasticity` is redundant.
 Every `outputs/model_<run>.joblib` is a self-contained sklearn object. The
 export contract (see [src/models/export.py](src/models/export.py)) is:
 
-- **log-y objective** (`squared_error` on ElasticNet / XGB / LGB / HGB) — the
-  inner `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
+- **log-y objective** (`squared_error` on ElasticNet / HGB / XGB / LGB / RF) —
+  the inner `Pipeline` is wrapped in `TransformedTargetRegressor(func=log1p,
   inverse_func=expm1)` and refit on raw volume.
 - **raw-y objective** (`poisson` / `tweedie` / `gamma`) — the inner
   `Pipeline` is refit directly on raw volume; no TTR wrapper.

@@ -109,6 +109,24 @@ def _make_fs_estimator(model_type: str, random_state: int):
             learning_rate=0.1,
             random_state=random_state,
         )
+    if model_type == "rf":
+        # Lightweight surrogate for BorutaShap. sklearn RF lacks the C++ +
+        # optimized SHAP path that XGB/LGB have, so the boosters' "library
+        # default + 200 trees" recipe makes a ~5min trial here. We trade
+        # config-symmetry for wallclock: shallow + sqrt features + half
+        # bootstrap is enough for stable importance ranking on a small
+        # candidate set (BorutaShap only needs real-vs-shadow ordering).
+        from sklearn.ensemble import RandomForestRegressor
+        return RandomForestRegressor(
+            n_estimators=80,
+            max_depth=8,
+            min_samples_leaf=10,
+            max_features="sqrt",
+            max_samples=0.5,
+            bootstrap=True,
+            random_state=random_state,
+            n_jobs=-1,
+        )
     raise ValueError(f"Unsupported model_type: {model_type}")
 
 
