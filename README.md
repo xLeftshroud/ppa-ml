@@ -32,7 +32,7 @@ End-to-end flow from a fresh clone. `dataset/` and `outputs/` are gitignored, so
 
 ```bash
 # 1. Drop the raw source CSV into the dataset/ folder
-cp /path/to/original-dataset.csv dataset/original-dataset.csv
+cp /path/to/original_dataset.csv dataset/original_dataset.csv
 
 # 2. Run the cleaning notebook end-to-end
 jupyter nbconvert --to notebook --execute notebooks/01_data_preparation.ipynb --inplace
@@ -87,7 +87,7 @@ python -m scripts.compare_runs
 ## Data
 
 - Input CSV path is configured at [src/config.py:5](src/config.py#L5); default is `dataset/dataset_cleaned.csv`. The cleaning notebook
-  [notebooks/01_data_preparation.ipynb](notebooks/01_data_preparation.ipynb) produces this file from `dataset/original-dataset.csv`. The whole `dataset/` directory is gitignored.
+  [notebooks/01_data_preparation.ipynb](notebooks/01_data_preparation.ipynb) produces this file from `dataset/original_dataset.csv`. The whole `dataset/` directory is gitignored.
 - Required raw columns: 
   - `yearweek`,
   - `product_sku_code`,
@@ -122,7 +122,7 @@ python -m scripts.compare_runs
 ppa-ml/
 ├── requirements.txt
 ├── dataset/                           # input data (gitignored)
-│   ├── original-dataset.csv           # raw source
+│   ├── original_dataset.csv           # raw source
 │   └── dataset_cleaned.csv            # output of notebooks/01_data_preparation.ipynb
 ├── notebooks/
 │   ├── 01_data_preparation.ipynb      # raw -> cleaned
