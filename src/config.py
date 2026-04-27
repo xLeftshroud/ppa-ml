@@ -9,7 +9,7 @@ OUTPUTS.mkdir(exist_ok=True)
 SEEDS = [42, 123, 456]
 N_SPLITS = 3
 TEST_WEEK_RATIO = 0.20
-TUNING_WALLCLOCK_SEC = 3600
+TUNING_WALLCLOCK_SEC = 60
 TUNING_MAX_TRIALS = 1000
 
 # Elastic Net cardinality split: <= threshold uses one-hot, > threshold uses target encoding.

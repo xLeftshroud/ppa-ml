@@ -245,11 +245,16 @@ def run_tuning(
         seed=seed, metric=metric,
         objective_name=objective_name, y_fit=y_fit, expects_raw=expects_raw,
     )
+    # Catch model-fit failures (e.g., XGB NaN gradients producing
+    # '-nan(ind)' eval strings) so a single bad trial fails gracefully
+    # instead of terminating the whole study. KeyboardInterrupt is a
+    # BaseException, not Exception, so Ctrl-C still propagates.
     study.optimize(
         obj,
         timeout=timeout_sec,
         n_trials=max_trials,
         show_progress_bar=False,
+        catch=(Exception,),
     )
     return {
         "best_params": study.best_params,
