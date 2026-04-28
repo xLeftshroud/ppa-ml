@@ -6,7 +6,7 @@ Five model-specific extractors return a uniform DataFrame:
 Plausibility checks:
     - sign_test:       share of SKUs with beta < 0 (target > 95%)
     - magnitude_test:  share of SKUs with beta in [SOFT_DRINK_LOWER, SOFT_DRINK_UPPER]
-                       (currently [-3.5, -0.3]; see constants below)
+                       (currently [-3.5, -0.5]; see constants below)
     - stability:       coefficient of variation across bootstraps (target < 0.3)
 """
 from __future__ import annotations
@@ -16,11 +16,7 @@ import pandas as pd
 
 
 SOFT_DRINK_LOWER = -3.5
-# Upper bound widened from -0.5 to -0.3 after switching the target from log
-# packs to log volume_in_litres: pack-size effects are no longer absorbed into
-# beta, so it tends to land slightly less negative. Narrow once the new
-# distribution stabilises.
-SOFT_DRINK_UPPER = -0.3
+SOFT_DRINK_UPPER = -0.5
 
 
 # ------------------------------------------------------------------

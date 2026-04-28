@@ -337,7 +337,7 @@ A run becomes champion **iff it passes all four gates** (baselines are excluded 
 | `gate_cv`    | `cv_rank ≤ --top-k`                                                                             |
 | `gate_sig`   | `p_value < 0.05` vs `seasonal_naive` (Nemenyi if available, else Wilcoxon)                      |
 | `gate_sealed`| `sealed_rank ≤ --top-k`                                                                         |
-| `gate_elast` | `sign_test_pass_nonzero == True` (≥95% of non-zero β are negative) **AND** `share_in_soft_drink_range > 0.5` (>50% of β lie in `[-3.5, -0.3]`) |
+| `gate_elast` | `sign_test_pass_nonzero == True` (≥95% of non-zero β are negative) **AND** `share_in_soft_drink_range > 0.5` (>50% of β lie in `[-3.5, -0.5]`) |
 
 If any gate fails, the script prints the top candidates ranked by `gates_passed` and the blocking gate, and skips writing `champion_card.json`. Tiebreaker among gate-passers: lowest CV `--metric`.
 
