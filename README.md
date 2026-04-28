@@ -138,6 +138,7 @@ ppa-ml/
 │   ├── run_bayesian.py                # hierarchical Bayes track
 │   ├── run_baselines.py               # naive + seasonal_naive only, no ML training
 │   ├── reextract_elasticity.py        # refresh SKU-β from joblibs (no retrain)
+│   ├── inspect_optuna.py              # snapshot of all studies in outputs/optuna.db
 │   └── compare_runs.py                # 4-layer comparison + champion pick
 ├── tests/
 │   └── test_pipeline.py               # smoke tests (feature engineering, CV, baselines, elastic_net fit)
