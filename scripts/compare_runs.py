@@ -311,17 +311,30 @@ def main() -> None:
         print(comp[show_cols].head(min(args.top_k * 3, len(comp))).to_string())
 
     champ = pick_champion(comp, args.metric)
+
+    comp["gates_passed"] = (
+        comp["gate_cv"].astype(int) + comp["gate_sig"].astype(int)
+        + comp["gate_sealed"].astype(int) + comp["gate_elast"].astype(int)
+    )
+    print("\n" + "=" * 80)
+    print(f"  TOP {args.top_k} (sorted by gates_passed desc, then CV {args.metric}):")
+    print("=" * 80)
+    topk = comp.sort_values(
+        ["gates_passed", "cv_mean"], ascending=[False, True]
+    ).head(args.top_k)
+    topk_display = topk.copy()
+    topk_display.index = [
+        f"* {idx}" if idx == champ else f"  {idx}"
+        for idx in topk.index
+    ]
+    with pd.option_context("display.float_format", "{:.4f}".format):
+        print(topk_display[
+            ["gates_passed", "cv_mean", "sealed", "sign_pass", "share_in_range"]
+        ].to_string())
+
     print("\n" + "=" * 80)
     if champ is None:
         print("  CHAMPION: none — no run passed all 4 gates.")
-        print("  Candidates with most gates passed:")
-        comp["gates_passed"] = (
-            comp["gate_cv"].astype(int) + comp["gate_sig"].astype(int)
-            + comp["gate_sealed"].astype(int) + comp["gate_elast"].astype(int)
-        )
-        print(comp.sort_values(["gates_passed", "cv_mean"], ascending=[False, True])
-              [["gates_passed", "cv_mean", "sealed", "sign_pass", "share_in_range"]]
-              .head(5).to_string())
     else:
         card = {
             "champion": champ,
