@@ -361,7 +361,7 @@ Written to `--outputs-dir` (default `outputs/`):
 
 ## Reproducing the current champion
 
-The current shipped champion is `lgb_poisson` (CV WMAPE 0.232, sealed WMAPE 0.281, 99% negative β, median β ≈ -1.06).
+The current shipped champion is `xgb_poisson`, selected by the four-layer evidence framework (CV WMAPE 0.267 ± 0.018, CV rank 3; sealed WMAPE 0.324, sealed rank 4; Nemenyi p = 0.038 vs `seasonal_naive`; 100% negative β among non-zero estimates; median β ≈ -0.56; 54.5% of β in the soft-drink range [-3.5, -0.5]). The CV leader (`hgb_poisson`, CV WMAPE 0.252) and the sealed-test leader (`rf_squared_error`, sealed WMAPE 0.310) were both eliminated by the elasticity-magnitude gate; `xgb_poisson` is the lowest-CV-WMAPE candidate that passes all four gates simultaneously. Full champion card in `outputs/champion_card.json`.
 
 **Path A — reuse existing joblibs (seconds).** Re-extract elasticity from the existing joblibs and re-rank.
 
